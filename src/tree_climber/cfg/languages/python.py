@@ -7,15 +7,16 @@ exceptions (`try`/`except`/`else`/`finally`, `raise`, `with`), and definitions
 (nested functions, classes and their methods, decorators). Every function, at any
 depth, and every method is its own ENTRY/EXIT subgraph; where it is defined, the
 enclosing flow gets one statement that binds the name and runs decorators, default
-values and annotations. Lambdas stay inside their statement. Statements without
-a dedicated handler become a single STATEMENT node, so unsupported constructs
-never invent control flow; later work replaces them construct by construct.
+values and annotations. Lambdas, comprehensions, `yield` and `await` stay inside
+their statement: they hold no statements, so there is no control flow to build.
+Any other statement without a dedicated handler also becomes a single STATEMENT
+node, so unsupported constructs never invent control flow.
 
 Exception edges, labeled `exception`, leave from the state *before* a statement
 (the predecessors of each statement that may raise), because the raising
-statement never completes. A `finally` block, or the `__exit__` node of a `with`,
-is shared: normal flow, exceptions, `return`, `break`, and `continue` all pass
-through it and continue to their own targets.
+statement never completes. A `finally` block, or the `__exit__` node of a `with`
+(`__aexit__` for `async with`), is shared: normal flow, exceptions, `return`,
+`break`, and `continue` all pass through it and continue to their own targets.
 """
 
 from dataclasses import dataclass, field
@@ -825,7 +826,9 @@ class PythonCFGVisitor(CFGVisitor):
         is_async = any(child.type == "async" for child in node.children)
         header_text = f"{'async ' if is_async else ''}with {get_source_text(clause)}"
         header_id = self.create_node(NodeType.STATEMENT, clause, header_text)
-        exit_id = self.create_node(NodeType.STATEMENT, source_text="__exit__")
+        exit_id = self.create_node(
+            NodeType.STATEMENT, source_text="__aexit__" if is_async else "__exit__"
+        )
         self._cannot_raise.add(exit_id)
 
         frame = _Finally(

@@ -13,11 +13,12 @@ A hands-on tour of what Tree Climber does with Python. Every command and every o
 | `with` / `async with` | Modeled (exception suppression by `__exit__` is not) |
 | Calls between functions in the same file | Linked, including calls to a function defined later |
 | Def-use chains and reaching definitions | Modeled |
-| `async def` | Modeled like `def` |
+| `async def`, `async for`, `async with` | Modeled like their sync forms |
 | `match` / `case` | Modeled: one test per case, captures, guards, no fall-through |
 | Nested functions, classes and methods, decorators | Modeled: every function and method is its own subgraph, and the definition is one statement in the enclosing flow |
 | Lambdas | Stay inside their statement (by design) |
-| Comprehensions, generators | Stay inside their statement; their own variables are not reported (#11) |
+| Comprehensions, generator expressions | Stay inside their statement; their own variables are local to them |
+| `yield`, `yield from`, `await` | Stay inside their statement and do not end the function |
 | Closures, `global` / `nonlocal` | Not connected across scopes: dataflow does not cross function calls |
 
 Python is available from the CLI, the HTTP API, and the web UI (pick it in the language selector; the editor keeps whatever code was in it, so paste Python in).
@@ -482,27 +483,60 @@ Def-use chains
 
 Check: `return count` depends on `count = 0` only; the `count = count + 1` inside `bump` is not linked to either. This is a known limitation of the framework (it applies to C globals too), not specific to Python.
 
-### Still inline: lambdas and comprehensions
+### Still inline: lambdas, comprehensions, yield and await
 
 ```python
-def outer(xs):
-    sq = [v * v for v in xs]
-    key = lambda v: helper(v)
-    return sq
+async def fetch_all(urls, session):
+    sizes = [len(b) for b in bodies(urls)]
+    async with session.get(urls[0]) as resp:
+        text = await resp.text()
+    words = {w for w in text.split() if w}
+    return sizes, words
+
+
+def numbers(limit):
+    n = 0
+    while n < limit:
+        got = yield n
+        n = n + (got or 1)
 ```
 
 ```
 CFG edges
-  ENTRY:outer -> sq = [v * v for v in xs]
-  sq = [v * v for v in xs] -> key = lambda v: helper(v)
-  key = lambda v: helper(v) -> return sq
-  return sq -> EXIT:outer
+  ENTRY:fetch_all -> sizes = [len(b) for b in bodies(urls)]
+  sizes = [len(b) for b in bodies(urls)] -> async with session.get(urls[0]) as resp
+  async with session.get(urls[0]) as resp -> __aexit__  [exception]
+  async with session.get(urls[0]) as resp -> text = await resp.text()
+  __aexit__ -> EXIT:fetch_all  [exception]
+  __aexit__ -> words = {w for w in text.split() if w}
+  text = await resp.text() -> __aexit__
+  words = {w for w in text.split() if w} -> return sizes, words
+  return sizes, words -> EXIT:fetch_all
+  ENTRY:numbers -> n = 0
+  n = 0 -> n < limit
+  n < limit -> EXIT:numbers  [false]
+  n < limit -> got = yield n  [true]
+  got = yield n -> n = n + (got or 1)
+  n = n + (got or 1) -> n < limit
 Def-use chains
-  xs: ENTRY:outer => sq = [v * v for v in xs]
-  sq: sq = [v * v for v in xs] => return sq
+  urls: ENTRY:fetch_all => sizes = [len(b) for b in bodies(urls)], async with session.get(urls[0]) as resp
+  session: ENTRY:fetch_all => async with session.get(urls[0]) as resp
+  resp: async with session.get(urls[0]) as resp => text = await resp.text()
+  text: text = await resp.text() => words = {w for w in text.split() if w}
+  sizes: sizes = [len(b) for b in bodies(urls)] => return sizes, words
+  words: words = {w for w in text.split() if w} => return sizes, words
+  n: n = 0 => n < limit, got = yield n, n = n + (got or 1)
+  n: n = n + (got or 1) => n < limit, got = yield n, n = n + (got or 1)
+  limit: ENTRY:numbers => n < limit
+  got: got = yield n => n = n + (got or 1)
 ```
 
-Check: neither the lambda nor the comprehension gets a graph. A lambda is an expression with no statements, so there is no control flow to show: its calls (`helper`) count as calls of the statement that contains it, and its parameter (`v`) is not a use. Comprehension support is tracked as #11.
+Check:
+- none of the comprehensions (`[len(b) for b in ...]`, `{w for w in ...}`) or the `await` or `yield` has a graph of its own: each is part of its statement, which holds no further statements, so there is no control flow to show;
+- comprehension variables are local: `b` and `w` are not definitions or uses of anything outside, and a variable of the same name outside is unaffected. Only the first iterable (`bodies(urls)`, `text.split()`) is evaluated in the enclosing scope. A walrus inside a comprehension binds in the enclosing scope, so `[y := f(x) for x in xs]` defines `y`;
+- `got = yield n` defines `got` from the sent value, and `yield` does not end the function: the loop continues. A generator is one function subgraph; calling it is linked to its entry like any call, although the body really runs when it is iterated;
+- `async with` ends in an `__aexit__` node (`__exit__` for a plain `with`), and `async for` is a loop header like `for`, with the same `else` handling;
+- a lambda is the same: its calls (`helper` in `lambda v: helper(v)`) count as calls of the statement that contains it, and its parameter is not a use.
 
 ## 4. HTTP API
 
