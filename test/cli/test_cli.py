@@ -148,3 +148,47 @@ def test_entry_point_reports_the_version():
 
     assert result.returncode == 0, result.stderr
     assert f"Tree Climber v{__version__}" in result.stdout
+
+
+@pytest.fixture
+def launched(monkeypatch):
+    calls = []
+
+    def fake_launch(target, *args, **kwargs):
+        calls.append(target)
+        return 0
+
+    monkeypatch.setattr("tree_climber.cli.commands.typer.launch", fake_launch)
+    return calls
+
+
+def test_show_is_off_by_default(c_file, tmp_path, launched):
+    result = runner.invoke(app, [str(c_file), "--draw-cfg", "-o", str(tmp_path)])
+
+    assert result.exit_code == 0, result.output
+    assert launched == []
+
+
+def test_show_opens_every_saved_image(c_file, tmp_path, launched):
+    result = runner.invoke(
+        app,
+        [str(c_file), "--draw-ast", "--draw-cfg", "--draw-dfg", "--draw-cpg", "--show"]
+        + ["-o", str(tmp_path)],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert launched == [
+        str(tmp_path / f"prog.c_{kind}.png") for kind in ("ast", "cfg", "dfg", "cpg")
+    ]
+
+
+def test_a_viewer_that_fails_to_launch_only_warns(c_file, tmp_path, monkeypatch):
+    monkeypatch.setattr("tree_climber.cli.commands.typer.launch", lambda *a, **k: 127)
+
+    result = runner.invoke(
+        app, [str(c_file), "--draw-cfg", "--show", "-o", str(tmp_path)]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "could not open" in result.output
+    assert (tmp_path / "prog.c_cfg.png").exists()
