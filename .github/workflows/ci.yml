@@ -2,42 +2,46 @@ name: CI
 
 on:
   push:
-    branches: [ main ]
+    branches: [ master ]
   pull_request:
-    branches: [ main ]
+    branches: [ master ]
 
 jobs:
   lint:
     name: Linting
     runs-on: ubuntu-latest
-    
+
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
-    
+
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
         python-version: '3.12'
-    
+
     - name: Install uv
       uses: astral-sh/setup-uv@v4
       with:
         version: "latest"
-    
+
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y graphviz graphviz-dev
+
     - name: Install dependencies
       run: |
-        apt install -y graphviz graphviz-dev
         uv sync --dev
-    
+
     - name: Run ruff format check
       run: |
         uv run ruff format --check .
-    
+
     - name: Run ruff lint
       run: |
         uv run ruff check .
-    
+
     - name: Run pyright type checking
       run: |
         uv run pyright
@@ -45,26 +49,55 @@ jobs:
   test:
     name: Testing
     runs-on: ubuntu-latest
-    
+
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
-    
+
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
         python-version: '3.12'
-    
+
     - name: Install uv
       uses: astral-sh/setup-uv@v4
       with:
         version: "latest"
-    
+
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y graphviz graphviz-dev
+
     - name: Install dependencies
       run: |
-        apt install -y graphviz graphviz-dev
         uv sync --dev
-    
+
     - name: Run pytest
       run: |
         uv run pytest -v
+
+  frontend:
+    name: Frontend build
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: src/tree_climber/viz/frontend
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Bun
+      uses: oven-sh/setup-bun@v2
+      with:
+        bun-version: "1.4.2"
+
+    - name: Install dependencies
+      run: |
+        bun install --frozen-lockfile
+
+    - name: Type-check and build
+      run: |
+        bun run build
