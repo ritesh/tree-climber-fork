@@ -303,7 +303,9 @@ def patterns_of(pattern: str):
         f"match s:\n    case {pattern}:\n        pass\n", "python"
     )
     match_statement = root.root_node.children[0]
-    clause = match_statement.child_by_field_name("body").named_children[0]
+    body = match_statement.child_by_field_name("body")
+    assert body is not None
+    clause = body.named_children[0]
     return [c for c in clause.named_children if c.type == "case_pattern"]
 
 
