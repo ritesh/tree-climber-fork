@@ -513,7 +513,7 @@ function layoutGraph(cy: cytoscape.Core, callback?: () => void) {
   cy.edges().filter((e) => e.data('edgeType') === 'DATA_DEPENDENCY').style({ display: 'none' });
 
   // Layout only CFG nodes and edges
-  const layoutElements = cy.collection(cfgNodes).union(cfgEdges);
+  const layoutElements = cfgNodes.union(cfgEdges);
   const layout = layoutElements.layout({
     name: 'dagre',
     rankSep: 50,
