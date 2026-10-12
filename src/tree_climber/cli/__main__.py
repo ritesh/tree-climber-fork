@@ -31,6 +31,30 @@ from tree_climber.cli.source import (
 )
 from tree_climber.language_registry import SUPPORTED_LANGUAGES
 
+
+def normalize_option(name: str) -> str:
+    """Treat `--draw_cfg` and `--draw-cfg` as the same option.
+
+    Click passes the option name without its leading dashes.
+    """
+    return name.replace("_", "-")
+
+
+def version_callback(value: bool) -> None:
+    if value:
+        typer.echo(f"Tree Climber v{VERSION}")
+        typer.echo("Program analysis tool with AST, CFG, DFG, and CPG visualization")
+        raise typer.Exit()
+
+
+def list_languages_callback(value: bool) -> None:
+    if value:
+        typer.echo("Supported programming languages:")
+        for lang in SUPPORTED_LANGUAGES:
+            typer.echo(f"  • {lang}")
+        raise typer.Exit()
+
+
 # Create the main Typer app
 app = typer.Typer(
     name="tree-climber",
@@ -40,7 +64,26 @@ app = typer.Typer(
 )
 
 
+@app.command(context_settings={"token_normalize_func": normalize_option})
 def typer_main(
+    version: Annotated[
+        Optional[bool],
+        typer.Option(
+            "--version",
+            callback=version_callback,
+            is_eager=True,
+            help="Show version information and exit",
+        ),
+    ] = None,
+    list_languages: Annotated[
+        Optional[bool],
+        typer.Option(
+            "--list-languages",
+            callback=list_languages_callback,
+            is_eager=True,
+            help="List supported programming languages and exit",
+        ),
+    ] = None,
     filename: Annotated[
         Optional[Path],
         typer.Argument(
@@ -50,25 +93,25 @@ def typer_main(
     # Analysis options
     draw_ast: Annotated[
         bool,
-        typer.Option("--draw_ast", help="Visualize Abstract Syntax Tree"),
+        typer.Option("--draw-ast", help="Visualize Abstract Syntax Tree"),
     ] = False,
     draw_cfg: Annotated[
         bool,
-        typer.Option("--draw_cfg", help="Visualize Control Flow Graph"),
+        typer.Option("--draw-cfg", help="Visualize Control Flow Graph"),
     ] = False,
     draw_dfg: Annotated[
         bool,
-        typer.Option("--draw_dfg", help="Visualize Data Flow Graph/Def-Use Chains"),
+        typer.Option("--draw-dfg", help="Visualize Data Flow Graph/Def-Use Chains"),
     ] = False,
     draw_duc: Annotated[
         bool,
         typer.Option(
-            "--draw_duc", help="Visualize Def-Use Chains (alias for --draw_dfg)"
+            "--draw-duc", help="Visualize Def-Use Chains (alias for --draw-dfg)"
         ),
     ] = False,
     draw_cpg: Annotated[
         bool,
-        typer.Option("--draw_cpg", help="Visualize Code Property Graph (AST+CFG+DFG)"),
+        typer.Option("--draw-cpg", help="Visualize Code Property Graph (AST+CFG+DFG)"),
     ] = False,
     # Language and format options
     language: Annotated[
@@ -302,23 +345,8 @@ def typer_main(
         raise typer.Exit(1)
 
 
-@app.command()
-def version():
-    """Show version information."""
-    typer.echo(f"Tree Climber v{VERSION}")
-    typer.echo("Program analysis tool with AST, CFG, DFG, and CPG visualization")
-
-
-@app.command()
-def languages():
-    """List supported programming languages."""
-    typer.echo("Supported programming languages:")
-    for lang in SUPPORTED_LANGUAGES:
-        typer.echo(f"  • {lang}")
-
-
 def main() -> None:
-    typer.run(typer_main)
+    app()
 
 
 if __name__ == "__main__":

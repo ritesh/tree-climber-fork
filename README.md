@@ -76,7 +76,7 @@ CLI is available as a command, `tree-climber`. Run the CLI against a file or dir
 Example:
 
 ```bash
-tree-climber test/example.c --draw_cfg --draw_cpg
+tree-climber test/example.c --draw-cfg --draw-cpg
 ```
 
 Example CFG | Example CPG (Code Property Graph, including AST + CFG + DFG edges)
@@ -89,7 +89,7 @@ Example bigraph CPG
 --
 ![Example bigraph CPG](./test/example.c_cpg_bigraph.png)
 
-Try `tree-climber --help` to see all options.
+Options also accept underscores (`--draw_cfg`), for compatibility with earlier versions. Try `tree-climber --help` to see all options, `tree-climber --version`, or `tree-climber --list-languages`.
 
 ### Web Application
 
