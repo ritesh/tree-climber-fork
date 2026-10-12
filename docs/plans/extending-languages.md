@@ -11,8 +11,9 @@ This guide provides step-by-step instructions for adding support for a new progr
 
 1. Add node types configuration
 2. Create language configuration module
-3. Set up test files
-4. Implement and test
+3. Register the language
+4. Set up test files
+5. Implement and test
 
 ## Detailed Steps
 
@@ -97,13 +98,28 @@ source_node.successors.add(target_node.id)
 source_node.edge_labels[target_node.id] = "true"  # For conditional branches
 ```
 
-### 3. Set Up Test Files
+### 3. Register the Language
+
+Add one `LanguageSpec` to `LANGUAGES` in `src/tree_climber/language_registry.py`:
+
+```python
+LanguageSpec(
+    name="python",  # registry key and tree-sitter grammar name
+    display_name="Python",
+    extensions=(".py",),
+    visitor="tree_climber.cfg.languages.python:PythonCFGVisitor",
+)
+```
+
+The CFG builder, CLI (supported-language list, `--language` validation, file extension detection), and web API (request validation and OpenAPI schema) all derive from the registry. The only other manual step is the label in `src/tree_climber/viz/frontend/src/LanguageSelector.tsx`. `test/test_language_registry.py` checks every registered language's grammar, visitor, and builder automatically.
+
+### 4. Set Up Test Files
 
 1. Create a test file at `src/tree_climber/cfg/test_<language>.py`
 2. Create sample code files in `test/test.<language_extension>`
 3. Implement test cases modeling after `test_c.py` and `test_java.py`
 
-### 4. Implementation Process
+### 5. Implementation Process
 
 1. Start with basic control flow structures:
    - If statements
