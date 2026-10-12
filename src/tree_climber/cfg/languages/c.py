@@ -158,8 +158,8 @@ class CCFGVisitor(CFGVisitor):
     def visit_declaration(self, node: Node) -> CFGTraversalResult:
         return self._visit_linear_statement(node)
 
-    def visit_translation_unit(self, node: Node) -> CFGTraversalResult:
-        """Visit the root translation unit node"""
+    def visit_translation_unit(self, node: Node) -> Optional[CFGTraversalResult]:
+        """Visit the root translation unit node; None if it has no functions"""
         first_entry = None
         last_exits = None
         for child in node.children:
@@ -169,12 +169,8 @@ class CCFGVisitor(CFGVisitor):
                     first_entry = result.entry_node_id
                 last_exits = result.exit_node_ids
 
-        assert first_entry is not None, (
-            "Translation unit must have at least one entry node"
-        )
-        assert last_exits is not None, (
-            "Translation unit must have at least one exit node"
-        )
+        if first_entry is None or last_exits is None:
+            return None
         return CFGTraversalResult(
             entry_node_id=first_entry,
             exit_node_ids=last_exits,
