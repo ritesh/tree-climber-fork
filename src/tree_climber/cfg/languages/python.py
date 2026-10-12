@@ -2,8 +2,12 @@
 Control Flow Graph (CFG) generator for Python using py-tree-sitter.
 
 Covers straight-line code, function definitions, structured control flow
-(`if`/`elif`/`else`, `while`, `for`, loop `else`, `break`, `continue`, `match`), and
-exceptions (`try`/`except`/`else`/`finally`, `raise`, `with`). Statements without
+(`if`/`elif`/`else`, `while`, `for`, loop `else`, `break`, `continue`, `match`),
+exceptions (`try`/`except`/`else`/`finally`, `raise`, `with`), and definitions
+(nested functions, classes and their methods, decorators). Every function, at any
+depth, and every method is its own ENTRY/EXIT subgraph; where it is defined, the
+enclosing flow gets one statement that binds the name and runs decorators, default
+values and annotations. Lambdas stay inside their statement. Statements without
 a dedicated handler become a single STATEMENT node, so unsupported constructs
 never invent control flow; later work replaces them construct by construct.
 
@@ -15,6 +19,7 @@ through it and continue to their own targets.
 """
 
 from dataclasses import dataclass, field
+from contextlib import contextmanager
 from typing import Iterable, Iterator, List, Optional, Set, Tuple
 
 from tree_sitter import Node
@@ -275,6 +280,29 @@ class PythonCFGVisitor(CFGVisitor):
                 "false",
             )
 
+    @contextmanager
+    def _function_scope(self) -> Iterator[None]:
+        """Hide the surrounding try regions, finally frames and loops while a
+        function body is built: nothing in it can raise to, jump to, or break out
+        of the code that merely defines the function."""
+        saved = (
+            self._regions,
+            self._finallys,
+            self.context.break_targets,
+            self.context.continue_targets,
+        )
+        self._regions, self._finallys = [], []
+        self.context.break_targets, self.context.continue_targets = [], []
+        try:
+            yield
+        finally:
+            (
+                self._regions,
+                self._finallys,
+                self.context.break_targets,
+                self.context.continue_targets,
+            ) = saved
+
     # Visitor methods
     def generic_visit(self, node: Node) -> CFGTraversalResult:
         """Treat any statement without a dedicated handler as one node."""
@@ -334,40 +362,127 @@ class PythonCFGVisitor(CFGVisitor):
         return CFGTraversalResult(entry_node_id=entry_id, exit_node_ids=[exit_id])
 
     def visit_function_definition(self, node: Node) -> CFGTraversalResult:
-        """A `def` below module level is one statement until nested functions
-        get their own graph; only the module visits function bodies."""
-        return self._visit_statement(node)
+        """A `def` below module level: one statement in the enclosing flow, with
+        the body built as its own subgraph."""
+        return self._visit_definition(node, node)
 
-    def _visit_function(self, node: Node) -> CFGTraversalResult:
-        """Visit a module-level function definition (including `async def`)"""
+    def visit_class_definition(self, node: Node) -> CFGTraversalResult:
+        """A `class`: one statement in the enclosing flow, with a subgraph per method."""
+        return self._visit_definition(node, node)
+
+    def visit_decorated_definition(self, node: Node) -> CFGTraversalResult:
+        """A decorated `def` or `class`: decorators run when it is defined."""
+        definition = get_required_child_by_field_name(node, "definition")
+        return self._visit_definition(node, definition)
+
+    def _visit_definition(self, node: Node, definition: Node) -> CFGTraversalResult:
+        """Build the statement that defines a function or class.
+
+        It binds the name and runs what is evaluated at definition time:
+        decorators (each is called with the new object), default values,
+        annotations, base classes, and the class body (the body's own methods are
+        separate subgraphs). Its text is the header only; `node` is the whole
+        statement, `definition` the `def` or `class` inside it.
+        """
+        name_node = get_required_child_by_field_name(definition, "name")
+        body = get_required_child_by_field_name(definition, "body")
+        header = node.text[: body.start_byte - node.start_byte].decode().strip()
+        header = header.removesuffix(":").rstrip()
+
+        node_id = self.create_node(NodeType.STATEMENT, name_node, header)
+        bindings = collect_bindings(node)
+        metadata = self.cfg.nodes[node_id].metadata
+        metadata.variable_definitions = bindings.definitions
+        metadata.variable_uses = bindings.uses
+        metadata.function_calls = self.get_calls(node) + self._decorator_calls(node)
+
+        if definition.type == "function_definition":
+            self._visit_function(definition)
+        else:
+            self._visit_methods(definition, get_source_text(name_node))
+        return CFGTraversalResult(entry_node_id=node_id, exit_node_ids=[node_id])
+
+    def _decorator_calls(self, node: Node) -> List[str]:
+        """Names called by decorators that are not themselves calls: `@cache` and
+        `@functools.cache` call `cache`. (`@route("/x")` records `route` already.)"""
+        names = []
+        for decorator in node.children:
+            if decorator.type != "decorator":
+                continue
+            expression = next(iter(decorator.named_children), None)
+            if expression is None:
+                continue
+            if expression.type == "identifier":
+                names.append(get_source_text(expression))
+            elif expression.type == "attribute":
+                attribute = expression.child_by_field_name("attribute")
+                if attribute is not None:
+                    names.append(get_source_text(attribute))
+        return names
+
+    def _visit_methods(self, class_node: Node, qualifier: str) -> None:
+        """Build a subgraph for each method of a class, and of classes nested in it."""
+        body = class_node.child_by_field_name("body")
+        if body is None:
+            return
+        for child in body.named_children:
+            definition = child
+            if child.type == "decorated_definition":
+                inner = child.child_by_field_name("definition")
+                if inner is None:
+                    continue
+                definition = inner
+            if definition.type == "function_definition":
+                self._visit_function(definition, qualifier)
+            elif definition.type == "class_definition":
+                nested_name = definition.child_by_field_name("name")
+                if nested_name is not None:
+                    self._visit_methods(
+                        definition, f"{qualifier}.{get_source_text(nested_name)}"
+                    )
+
+    def _visit_function(
+        self, node: Node, qualifier: Optional[str] = None
+    ) -> CFGTraversalResult:
+        """Build the ENTRY/EXIT subgraph of a function (including `async def`).
+
+        A method is displayed as `Class.method`, but calls reach it by its plain
+        name, so `self.method()` is linked to it. `__init__` is reached by the
+        class name, since `Class(...)` runs it.
+        """
         name_node = get_required_child_by_field_name(node, "name")
         parameters = get_required_child_by_field_name(node, "parameters")
         body_node = get_required_child_by_field_name(node, "body")
         function_name = get_source_text(name_node)
+        display_name = f"{qualifier}.{function_name}" if qualifier else function_name
+        call_name = function_name
+        if qualifier and function_name == "__init__":
+            call_name = qualifier.rsplit(".", 1)[-1]
 
-        self.cfg.function_name = function_name
+        self.cfg.function_name = display_name
 
-        entry_id = self.create_node(
-            NodeType.ENTRY, ast_node=name_node, source_text=function_name
-        )
-        self.cfg.nodes[entry_id].metadata.variable_definitions.extend(
-            parameter_names(parameters)
-        )
-        self.cfg.entry_node_ids.append(entry_id)
-        self.context.push_entry(entry_id)
-        self.context.register_function_definition(entry_id, function_name)
+        with self._function_scope():
+            entry_id = self.create_node(
+                NodeType.ENTRY, ast_node=name_node, source_text=display_name
+            )
+            self.cfg.nodes[entry_id].metadata.variable_definitions.extend(
+                parameter_names(parameters)
+            )
+            self.cfg.entry_node_ids.append(entry_id)
+            self.context.push_entry(entry_id)
+            self.context.register_function_definition(entry_id, call_name)
 
-        exit_id = self.create_node(NodeType.EXIT, source_text=function_name)
-        self.cfg.exit_node_ids.append(exit_id)
-        self.context.push_exit(exit_id)
+            exit_id = self.create_node(NodeType.EXIT, source_text=display_name)
+            self.cfg.exit_node_ids.append(exit_id)
+            self.context.push_exit(exit_id)
 
-        body = self.visit(body_node)
-        self.cfg.add_edge(entry_id, body.entry_node_id)
-        for body_exit in body.exit_node_ids:
-            self.cfg.add_edge(body_exit, exit_id)
+            body = self.visit(body_node)
+            self.cfg.add_edge(entry_id, body.entry_node_id)
+            for body_exit in body.exit_node_ids:
+                self.cfg.add_edge(body_exit, exit_id)
 
-        self.context.pop_entry()
-        self.context.pop_exit()
+            self.context.pop_entry()
+            self.context.pop_exit()
 
         return CFGTraversalResult(entry_node_id=entry_id, exit_node_ids=[exit_id])
 

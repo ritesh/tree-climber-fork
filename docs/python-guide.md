@@ -15,8 +15,10 @@ A hands-on tour of what Tree Climber does with Python. Every command and every o
 | Def-use chains and reaching definitions | Modeled |
 | `async def` | Modeled like `def` |
 | `match` / `case` | Modeled: one test per case, captures, guards, no fall-through |
-| Classes (and their methods), decorated functions, nested `def` | **One opaque statement** each: the CFG node is the whole construct and its body is not analyzed (#10) |
-| Lambdas, comprehensions | Stay inside their statement; their own variables are not reported (#10, #11) |
+| Nested functions, classes and methods, decorators | Modeled: every function and method is its own subgraph, and the definition is one statement in the enclosing flow |
+| Lambdas | Stay inside their statement (by design) |
+| Comprehensions, generators | Stay inside their statement; their own variables are not reported (#11) |
+| Closures, `global` / `nonlocal` | Not connected across scopes: dataflow does not cross function calls |
 
 Python is available from the CLI, the HTTP API, and the web UI (pick it in the language selector; the editor keeps whatever code was in it, so paste Python in).
 
@@ -313,7 +315,7 @@ Def-use chains
   n: ENTRY:helper => return n + 1
 ```
 
-Check: the call node gets a `function_call` edge into `helper` and `helper`'s exit returns to it, even though `helper` is defined after `main`. Calls are matched by the called name only: `obj.f()` is linked to every function named `f`, and a later `f = 1` does not unlink it. Methods inside classes are not analyzed.
+Check: the call node gets a `function_call` edge into `helper` and `helper`'s exit returns to it, even though `helper` is defined after `main`. Calls are matched by the called name only: `obj.f()` is linked to every function named `f`, and a later `f = 1` does not unlink it. Methods are matched the same way, so `self.step()` links to every method named `step`, in any class.
 
 ### Writes through subscripts and attributes
 
@@ -383,30 +385,124 @@ Check:
 - `case _` is irrefutable, so it has no `false` edge. Without it, the last case's `false` edge would skip to the code after the `match`;
 - nothing falls through from one body to the next, and `break`/`continue` in a case target the enclosing loop.
 
-### Constructs that are opaque today
+### Nested functions, classes, and decorators
+
+```python
+@cache
+def total(xs):
+    def add(a, b=0):
+        return a + b
+    return add(len(xs))
+
+
+class Account:
+    def __init__(self, owner):
+        self.owner = owner
+
+    def report(self):
+        return self.summary()
+
+    def summary(self):
+        return self.owner
+
+
+acct = Account("ann")
+acct.report()
+```
+
+```
+CFG edges
+  ENTRY:<module> -> @cache
+  @cache -> class Account
+  ENTRY:total -> def add(a, b=0)
+  def add(a, b=0) -> return add(len(xs))
+  ENTRY:add -> return a + b
+  EXIT:add -> return add(len(xs))  [function_return]
+  return a + b -> EXIT:add
+  return add(len(xs)) -> EXIT:total
+  return add(len(xs)) -> ENTRY:add  [function_call]
+  class Account -> acct = Account("ann")
+  ENTRY:Account.__init__ -> self.owner = owner
+  EXIT:Account.__init__ -> acct = Account("ann")  [function_return]
+  self.owner = owner -> EXIT:Account.__init__
+  ENTRY:Account.report -> return self.summary()
+  EXIT:Account.report -> acct.report()  [function_return]
+  return self.summary() -> ENTRY:Account.summary  [function_call]
+  return self.summary() -> EXIT:Account.report
+  ENTRY:Account.summary -> return self.owner
+  EXIT:Account.summary -> return self.summary()  [function_return]
+  return self.owner -> EXIT:Account.summary
+  acct = Account("ann") -> ENTRY:Account.__init__  [function_call]
+  acct = Account("ann") -> acct.report()
+  acct.report() -> EXIT:<module>
+  acct.report() -> ENTRY:Account.report  [function_call]
+Def-use chains
+  a: ENTRY:add => return a + b
+  b: ENTRY:add => return a + b
+  add: def add(a, b=0) => return add(len(xs))
+  xs: ENTRY:total => return add(len(xs))
+  self: ENTRY:Account.__init__ => self.owner = owner
+  self: ENTRY:Account.report => return self.summary()
+  self: ENTRY:Account.summary => return self.owner
+  owner: ENTRY:Account.__init__ => self.owner = owner
+  Account: class Account => acct = Account("ann")
+  acct: acct = Account("ann") => acct.report()
+```
+
+(The first node is really two lines, `@cache` and `def total(xs)`; the dump script prints the first line.)
+
+Check:
+- every function and method has its own `ENTRY`/`EXIT` pair, including `add`, which is nested in `total`; methods are named `Class.method`;
+- where a definition appears in the enclosing flow it is one statement with the header as its text. It defines the name (`add` is used by `return add(...)`), and it runs decorators (`@cache` is a call), default values, and base classes. A decorated module-level `def` appears in the module flow because it runs code; a plain module-level `def` still does not;
+- `class Account` is one statement; its methods are not part of the module flow and are reached only by calls;
+- `Account("ann")` links to `Account.__init__` (a constructor call), and `self.summary()` links to `Account.summary`;
+- nothing inside `add` can raise into, or `return` out of, `total`'s own flow: a nested function body is built in isolation.
+
+Names bound in a class body are class attributes, so they are not defined as variables of the enclosing scope, and a class body's own control flow is not modeled (the class is one statement that runs its calls).
+
+### Closures and global/nonlocal
+
+Dataflow here does not cross function calls (reaching definitions deliberately ignore `function_call` and `function_return` edges, so a callee's locals cannot overwrite the caller's). The consequence: a nested function's read of an enclosing local, and a `global` or `nonlocal` write, are not connected to the definition in the other scope.
+
+```python
+def outer():
+    count = 0
+    def bump():
+        nonlocal count
+        count = count + 1
+    bump()
+    return count
+```
+
+```
+Def-use chains
+  bump: def bump() => bump()
+  count: count = 0 => return count
+```
+
+Check: `return count` depends on `count = 0` only; the `count = count + 1` inside `bump` is not linked to either. This is a known limitation of the framework (it applies to C globals too), not specific to Python.
+
+### Still inline: lambdas and comprehensions
 
 ```python
 def outer(xs):
-    class A:
-        pass
     sq = [v * v for v in xs]
-    key = lambda v: v + 1
+    key = lambda v: helper(v)
     return sq
 ```
 
 ```
 CFG edges
-  ENTRY:outer -> class A:
-  class A: -> sq = [v * v for v in xs]
-  sq = [v * v for v in xs] -> key = lambda v: v + 1
-  key = lambda v: v + 1 -> return sq
+  ENTRY:outer -> sq = [v * v for v in xs]
+  sq = [v * v for v in xs] -> key = lambda v: helper(v)
+  key = lambda v: helper(v) -> return sq
   return sq -> EXIT:outer
 Def-use chains
   xs: ENTRY:outer => sq = [v * v for v in xs]
   sq: sq = [v * v for v in xs] => return sq
 ```
 
-Check: `class A:` collapses to a single node, so its body is not a separate step. The comprehension and lambda stay inside their statements and their own variable (`v`) is not reported. A decorated function and a function nested in another function likewise become one statement of the enclosing flow, with no graph of their own and no call links into them. These gaps are tracked as #10 and #11; anything that differs from this section is a bug.
+Check: neither the lambda nor the comprehension gets a graph. A lambda is an expression with no statements, so there is no control flow to show: its calls (`helper`) count as calls of the statement that contains it, and its parameter (`v`) is not a use. Comprehension support is tracked as #11.
 
 ## 4. HTTP API
 

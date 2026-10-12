@@ -319,21 +319,30 @@ class TestJumpsOutsideLoops:
 
 
 class TestNestedFunctionDefinitions:
-    def test_nested_def_is_one_statement_and_does_not_splice_its_body(self):
+    def test_nested_def_is_a_statement_with_its_own_subgraph(self):
         cfg = build_cfg("def f():\n    def g():\n        pass\n    x = 1\n")
 
-        nested = "def g():\n        pass"
-        assert entry_names(cfg) == ["f"]
+        assert entry_names(cfg) == ["f", "g"]
         assert edges(cfg) == {
-            ("ENTRY:f", nested, None),
-            (nested, "x = 1", None),
+            ("ENTRY:f", "def g()", None),
+            ("def g()", "x = 1", None),
             ("x = 1", "EXIT:f", None),
+            ("ENTRY:g", "pass", None),
+            ("pass", "EXIT:g", None),
         }
 
-    def test_def_inside_a_conditional_is_not_a_function_entry(self):
+    def test_def_inside_a_conditional_is_a_statement_of_its_branch(self):
         cfg = build_cfg("if a:\n    def g():\n        pass\n")
 
-        assert entry_names(cfg) == ["<module>"]
+        assert entry_names(cfg) == ["<module>", "g"]
+        assert edges(cfg) == {
+            (ENTRY, "a", None),
+            ("a", "def g()", "true"),
+            ("a", EXIT, "false"),
+            ("def g()", EXIT, None),
+            ("ENTRY:g", "pass", None),
+            ("pass", "EXIT:g", None),
+        }
 
 
 class TestLoopCarriedDataflow:
