@@ -17,7 +17,7 @@ A hands-on tour of what Tree Climber does with Python. Every command and every o
 | Classes (and their methods), decorated functions, nested `def`, `match` | **One opaque statement** each: the CFG node is the whole construct and its body is not analyzed (#9, #10) |
 | Lambdas, comprehensions | Stay inside their statement; their own variables are not reported (#10, #11) |
 
-Python is available from the CLI and the HTTP API. The web UI's language selector does not list it yet (#12).
+Python is available from the CLI, the HTTP API, and the web UI (pick it in the language selector; the editor keeps whatever code was in it, so paste Python in).
 
 ## 1. See a graph with the CLI
 

@@ -8,6 +8,7 @@ interface LanguageSelectorProps {
 const SUPPORTED_LANGUAGES = [
   { value: 'c', label: 'C' },
   { value: 'java', label: 'Java' },
+  { value: 'python', label: 'Python' },
 ] as const;
 
 export function loadLanguage(): string {

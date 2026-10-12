@@ -97,7 +97,7 @@ Graphs are saved as PNG files next to the input, or in the directory given with 
 ### Web Application
 
 The project includes a webapp for visualizing and interacting with CFG/DFGs, inspired by https://godbolt.org.
-To run it easily, open the project in VSCode and launch the config named "Run Server and Frontend". The language selector currently lists C and Java only; Python is available through the API and the CLI.
+To run it easily, open the project in VSCode and launch the config named "Run Server and Frontend".
 
 <img width="1849" height="811" alt="image" src="https://github.com/user-attachments/assets/2cde36a0-94e3-49f0-980c-7331784c06c7" />
 
