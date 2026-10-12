@@ -19,8 +19,7 @@ Author: Claude Code Assistant
 """
 
 import pytest
-from typing import List, Dict, Set, Optional, Tuple
-import tempfile
+from typing import List, Set, Optional, Tuple
 import os
 
 from tree_climber.cfg.builder import CFGBuilder
@@ -64,7 +63,7 @@ public class TestClass {{
         brace_count = 0
 
         for line in lines:
-            if f"public static" in line and method_name in line and "(" in line:
+            if "public static" in line and method_name in line and "(" in line:
                 in_method = True
                 brace_count = 0
 

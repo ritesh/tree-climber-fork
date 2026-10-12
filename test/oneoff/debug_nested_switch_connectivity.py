@@ -80,10 +80,10 @@ def debug_nested_switch_connectivity():
             edge_label = outer_switch_node.get_edge_label(default_stmt_id)
             print(f"  ✅ Default statement reachable with label: '{edge_label}'")
         else:
-            print(f"  ❌ Default statement NOT reachable from outer switch")
+            print("  ❌ Default statement NOT reachable from outer switch")
 
             # Check what the outer switch connects to
-            print(f"\n  Outer switch connects to:")
+            print("\n  Outer switch connects to:")
             for successor_id in outer_switch_node.successors:
                 successor_node = cfg.nodes[successor_id]
                 edge_label = outer_switch_node.get_edge_label(successor_id)
@@ -92,7 +92,7 @@ def debug_nested_switch_connectivity():
                 )
 
     # Check reachability from entry
-    print(f"\nReachability analysis:")
+    print("\nReachability analysis:")
     entry_nodes = [n for n in cfg.nodes.values() if n.node_type.name == "ENTRY"]
     if entry_nodes:
         entry_id = entry_nodes[0].id
@@ -116,10 +116,10 @@ def debug_nested_switch_connectivity():
             for node_id in unreachable:
                 node = cfg.nodes[node_id]
                 print(f"    {node_id}: {node.node_type.name} - '{node.source_text}'")
-                if node_id == default_statement[0]:
-                    print(f"      ❌ This is the default statement!")
+                if default_statement and node_id == default_statement[0]:
+                    print("      ❌ This is the default statement!")
         else:
-            print(f"  All nodes reachable")
+            print("  All nodes reachable")
 
 
 if __name__ == "__main__":

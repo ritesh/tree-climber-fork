@@ -4,7 +4,6 @@ Constants for the Tree Climber CLI interface.
 Following the DRY principle, all constants used throughout the CLI are defined here.
 """
 
-from enum import Enum
 from typing import List
 
 # Supported programming languages

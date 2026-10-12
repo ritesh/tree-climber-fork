@@ -4,7 +4,7 @@ from typing import Iterable, List, Optional, Set
 from tree_sitter import Node
 
 from tree_climber.ast_utils import dfs, get_source_text
-from tree_climber.cfg.cfg_types import CFGNode, NodeType
+from tree_climber.cfg.cfg_types import CFGNode
 from tree_climber.dataflow.dataflow_types import (
     DataflowFact,
     DataflowInitializer,
@@ -42,9 +42,11 @@ def extract_function_call_arguments(ast_node: Node) -> List[str]:
                             # Look for identifiers within the argument expression
                             for identifier in dfs(
                                 arg_child,
-                                lambda n: get_source_text(n)
-                                if n.type == "identifier"
-                                else None,
+                                lambda n: (
+                                    get_source_text(n)
+                                    if n.type == "identifier"
+                                    else None
+                                ),
                             ):
                                 if identifier:
                                     arguments.append(identifier)

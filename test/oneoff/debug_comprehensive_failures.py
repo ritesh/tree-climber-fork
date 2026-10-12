@@ -20,7 +20,6 @@ root causes and distinguish between code bugs vs. test bugs.
 """
 
 from tree_climber.cfg.builder import CFGBuilder
-from tree_climber.cfg.cfg_types import NodeType
 
 
 def analyze_failure(test_name, code, expected_issues=None):

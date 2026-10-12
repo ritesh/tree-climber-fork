@@ -33,7 +33,7 @@ def print_ast_structure(node, indent=0, max_depth=15):
                         field_name = node.field_name_for_child(i) or ""
                         if field_name:
                             field_name = f" [field: {field_name}]"
-                    except:
+                    except Exception:
                         pass
 
                 print(f"{prefix}  └─ {child.type}{field_name}")
@@ -104,7 +104,7 @@ def debug_nested_switch_ast():
                         # Check if this is a default case
                         for case_child in body_child.children:
                             if case_child.type == "default":
-                                print(f"      -> DEFAULT case found!")
+                                print("      -> DEFAULT case found!")
                                 default_count += 1
 
                 print(f"  Total cases: {case_count}, defaults: {default_count}")

@@ -6,7 +6,7 @@ where function arguments should alias to parameters within the called function.
 """
 
 from tree_climber.cfg.builder import CFGBuilder
-from tree_climber.dataflow.analyses.def_use import DefUseSolver, UseDefSolver
+from tree_climber.dataflow.analyses.def_use import DefUseSolver
 from tree_climber.dataflow.analyses.reaching_definitions import (
     ReachingDefinitionsProblem,
 )
