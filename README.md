@@ -10,9 +10,12 @@ Tree Climber is a comprehensive static analysis framework for generating Control
 
 ## Supported Languages
 
-- **C**: Full CFG generation with control structures, loops, and functions
+- **C**: CFG generation with control structures, loops, and functions
 - **Java**: CFG generation for Java language constructs
+- **Python**: Module-level code and functions, `if`/`while`/`for` (with `break`, `continue`, and loop `else`), `try`/`except`/`finally`, `raise`, and `with`. Classes, decorated and nested functions, and `match` are each treated as a single opaque statement for now. See the [Python guide](./docs/python-guide.md).
 - **Extensible**: Framework designed to easily add new language support
+
+Run `tree-climber --list-languages` to see what your install supports.
 
 ## Architecture
 
@@ -61,23 +64,21 @@ cd src/tree_climber/viz/frontend
 bun install
 ```
 
-4. (For CLI) Install CLI dependencies:
-```bash
-source .venv/bin/activate
-uv pip install -e .
-```
+`uv sync` also installs the `tree-climber` command; run it with `uv run tree-climber`, or activate `.venv` to use it directly.
 
 ## Usage
 
 ### CLI
 
-CLI is available as a command, `tree-climber`. Run the CLI against a file or directory. Use the flags below to pick which graphs to generate and how to render them.
+CLI is available as a command, `tree-climber`. Run the CLI against a file or directory. Use the flags below to pick which graphs to generate and how to render them. The language is detected from the file extension (`.c`, `.h`, `.java`, `.py`, `.pyi`); use `-l` to set it for stdin or clipboard input.
 
 Example:
 
 ```bash
 tree-climber test/example.c --draw-cfg --draw-cpg
 ```
+
+Python works the same way, for example `tree-climber my_module.py --draw-cfg --draw-dfg`. See the [Python guide](./docs/python-guide.md) for exercises that show what is modeled.
 
 Example CFG | Example CPG (Code Property Graph, including AST + CFG + DFG edges)
 -- | --
@@ -91,10 +92,12 @@ Example bigraph CPG
 
 Options also accept underscores (`--draw_cfg`), for compatibility with earlier versions. Try `tree-climber --help` to see all options, `tree-climber --version`, or `tree-climber --list-languages`.
 
+Graphs are saved as PNG files next to the input, or in the directory given with `-o`.
+
 ### Web Application
 
 The project includes a webapp for visualizing and interacting with CFG/DFGs, inspired by https://godbolt.org.
-To run it easily, open the project in VSCode and launch the config named "Run Server and Frontend".
+To run it easily, open the project in VSCode and launch the config named "Run Server and Frontend". The language selector currently lists C and Java only; Python is available through the API and the CLI.
 
 <img width="1849" height="811" alt="image" src="https://github.com/user-attachments/assets/2cde36a0-94e3-49f0-980c-7331784c06c7" />
 
@@ -129,16 +132,16 @@ bun dev
 
 The FastAPI backend provides the following endpoints:
 
-- `POST /parse` - Parse source code and return CFG in JSON format
-- `POST /analyze/def-use` - Perform def-use chain analysis
-- `POST /analyze/reaching-definitions` - Perform reaching definitions analysis
+- `POST /parse` - Parse source code (`{"source_code": ..., "language": "c" | "java" | "python"}`) and return the CFG, AST, and def-use edges as JSON
+- `GET /` - API version and supported languages
 - `GET /health` - Health check endpoint
 
 ## Limitations
 
-Currently, only basic program constructs are supported. I am working to make the parsing more robust and complete.
-
-See the full list of features handled and planned in the [Limitations section of this doc](./docs/plans/extending-languages.md).
+- The analysis is intraprocedural; function calls are linked to functions of the same name in the same file.
+- Variable updates through fields, subscripts, and pointers are approximated, because the dataflow framework only supports strong updates.
+- Python: classes, decorated and nested functions, `match`, lambdas, and comprehensions are not analyzed in detail yet. See the [Python guide](./docs/python-guide.md).
+- C and Java: see the [limitations section of the language extension guide](./docs/plans/extending-languages.md).
 
 ## Development
 
@@ -178,6 +181,20 @@ The CLI uses:
 - **Typer**: Terminal display and argument parsing
 - **GraphViz**: Graph visualization
 
+### Checks
+
+CI runs these on every pull request; run them before pushing:
+
+```bash
+uv run ruff format --check
+uv run ruff check
+uv run pyright
+uv run pytest
+(cd src/tree_climber/viz/frontend && bun install --frozen-lockfile && bun run build)
+```
+
 ## Documentation
 
-For detailed technical documentation, see the `docs/` directory:
+- [Python guide](./docs/python-guide.md): what is modeled and how to exercise it
+- [Extending languages](./docs/plans/extending-languages.md): adding a language, and per-language limitations
+- `docs/plans/`: design plans and results for each piece of work
