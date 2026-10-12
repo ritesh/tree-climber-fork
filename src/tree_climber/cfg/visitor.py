@@ -269,32 +269,26 @@ class CFGVisitor(abc.ABC):
 
     def _passthrough_entry_exit_nodes(self):
         """
-        For ENTRY, EXIT, ELSE, CASE, and DEFAULT nodes (except the main function entry/exit):
+        For ENTRY, EXIT, CASE, and DEFAULT nodes (except the main function entry/exit):
         1. Create direct connections from predecessors to successors
         2. Remove the nodes and all their connections
 
-        This applies to:
-        1. Nodes with NodeType.ENTRY, NodeType.EXIT, NodeType.CASE, or NodeType.DEFAULT
-        2. Nodes whose source_text starts with "ENTRY:", "EXIT:", "CASE:", or contains "else"
+        Nodes are selected by NodeType only, never by source text, so user
+        statements that happen to contain words like "else" are preserved.
         """
-        # Find all ENTRY, EXIT and ELSE nodes (except for the overall function entry/exit)
+        passthrough_types = {
+            NodeType.ENTRY,
+            NodeType.EXIT,
+            NodeType.CASE,
+            NodeType.DEFAULT,
+        }
         special_nodes = []
         for node_id, node in self.cfg.nodes.items():
             # Skip the overall function entry/exit nodes
             if node_id in self.cfg.entry_node_ids or node_id in self.cfg.exit_node_ids:
                 continue
 
-            # Check NodeType or source_text prefixes
-            is_entry_exit_type = node.node_type in [NodeType.ENTRY, NodeType.EXIT]
-            is_else_text = "else" in node.source_text.lower()
-            is_case_node = (
-                node.node_type == NodeType.CASE
-            ) or node.source_text.startswith("CASE:")
-            is_default_node = (node.node_type == NodeType.DEFAULT) or (
-                node.source_text == "DEFAULT"
-            )
-
-            if any([is_entry_exit_type, is_else_text, is_case_node, is_default_node]):
+            if node.node_type in passthrough_types:
                 special_nodes.append(node_id)
 
         # For each special node, create direct connections between predecessors and successors

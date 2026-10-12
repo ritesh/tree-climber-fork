@@ -1463,6 +1463,56 @@ class TestVariableAnalysis:
         )
 
 
+class TestPassthroughKeepsStatementsContainingElse:
+    """Statements whose text contains "else" must not be spliced out of the CFG."""
+
+    def test_identifier_and_string_containing_else(self, helper):
+        code = """
+        int main() {
+            int elsewhere = 1;
+            const char *msg = "else branch";
+            elsewhere = elsewhere + 1;
+            return elsewhere;
+        }
+        """
+        cfg = helper.build_cfg_from_code(code)
+
+        texts = [
+            node.source_text
+            for node in cfg.nodes.values()
+            if node.node_type in (NodeType.STATEMENT, NodeType.RETURN)
+        ]
+        assert texts == [
+            "int elsewhere = 1;",
+            'const char *msg = "else branch";',
+            "elsewhere = elsewhere + 1;",
+            "return elsewhere;",
+        ]
+        helper.assert_edge_connections(cfg, [(0, 2), (2, 3), (3, 4), (4, 5), (5, 1)])
+
+    def test_real_else_still_removed(self, helper):
+        code = """
+        int main() {
+            int elsewhere = 1;
+            if (elsewhere) {
+                elsewhere = 2;
+            } else {
+                elsewhere = 3;
+            }
+            return elsewhere;
+        }
+        """
+        cfg = helper.build_cfg_from_code(code)
+
+        texts = sorted(
+            node.source_text
+            for node in cfg.nodes.values()
+            if node.node_type == NodeType.STATEMENT
+        )
+        assert texts == ["elsewhere = 2;", "elsewhere = 3;", "int elsewhere = 1;"]
+        assert not any(n.source_text.startswith("EXIT:") for n in cfg.nodes.values())
+
+
 if __name__ == "__main__":
     # Run with pytest
     pytest.main([__file__, "-v"])
