@@ -29,7 +29,7 @@ Plan, in order of risk:
 
 ## Results
 
-Executive summary: CI-equivalent checks are green (`ruff format --check`, `ruff check`, `pyright`, `pytest`, frontend `tsc -b` and `vite build`). `pytest`: 99 passed, 28 strict xfails.
+Executive summary: CI-equivalent checks are green (`ruff format --check`, `ruff check`, `pyright`, `pytest`, frontend `tsc -b` and `vite build`). `pytest`: 111 passed, 20 strict xfails.
 
 ### #3
 Passthrough nodes are now selected by `NodeType` only. Regression tests added for C and Java. No existing CFG expectations changed.
@@ -38,9 +38,8 @@ Passthrough nodes are now selected by `NodeType` only. Regression tests added fo
 - Lint/types: 55 ruff findings and 22 pyright errors resolved. One stale debug script (`test/oneoff/debug_java_simple_if.py`) deleted because both its import path and its sample directory no longer exist.
 - Two real analysis bugs found while repairing the DFG tests and fixed with a regression test (C and Java): an identifier used as an initializer (`int y = x;`) or as the value of an assignment (`y = x;`) was not recorded as a use, because the rules skipped identifiers by parent node type instead of by field. This silently dropped def-use chains.
 - `test/dfg/` repaired: stale imports, a `test.dfg` import that could not resolve, tests calling a fixture function as an object, and a use-def lookup comparing text against a node id.
-- 28 DFG tests are marked `xfail(strict=True)`, verified with `--runxfail` to fail only for the stated reason:
-  - 20 assert interprocedural parameter aliasing, deliberately deferred to vNext in commit 77acb86 and TODO.md.
-  - 8 (`TestIncrementOperators`) assert that `a++` is a def-use self-reference outside loops. The fixpoint solver (cff4844) correctly does not produce that. Whether this convention should be reinstated is an open design decision.
+- 20 DFG tests are marked `xfail(strict=True)`. They assert interprocedural parameter aliasing, deliberately deferred to vNext in commit 77acb86 and TODO.md. Verified with `--runxfail` to fail only on the alias assertion.
+- `TestIncrementOperators` (8 tests) expected `a++` to be a def-use self-reference even in straight-line code. The fixpoint solver (cff4844) correctly does not produce that: the value `a++` defines can only reach the same `a++` on a later loop iteration. Decision: keep the solver. The tests were rewritten to assert the real chains in straight-line code and the self-edge in `while` and `for` loops (C and Java), and TODO.md was clarified.
 - `viz/test_api.py` moved to `test/viz/` and rewritten to call the endpoint coroutines directly, so it needs no live server and no new dependency (`TestClient` would require `httpx`).
 - Frontend: `Graph.tsx` collection call simplified; type stub for `cytoscape-node-html-label` split into a module augmentation file and an ambient module declaration.
 
