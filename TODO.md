@@ -46,7 +46,7 @@
 
 ### Old list
 - [ ] Add class/file nodes.
-- [ ] Handle forward declarations of function calls.
+- [x] Handle forward declarations of function calls.
 - [ ] Raise warnings throughout the code and handle gracefully where nodes are missing.
 - [ ] Avoid hardcoded constants in language specific code, preferring predicates, such as "comment" vs. "line_comment/block_comment" -> is_comment.
 - [ ] Detect potentially undefined variables in analyzed code.

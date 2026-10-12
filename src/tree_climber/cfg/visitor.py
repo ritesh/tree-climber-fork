@@ -203,34 +203,12 @@ class CFGVisitor(abc.ABC):
         node = self.cfg.nodes[node_id]
 
         # Link extra node metadata
-        call_edges = []
         if node.ast_node is not None:
-            function_calls = self.get_calls(node.ast_node)
-            if function_calls:
-                # TODO: Forward declare methods in Java
-                for (
-                    definition_id,
-                    definition_name,
-                ) in self.context.function_definitions.items():
-                    if definition_name in function_calls:
-                        call_edges.append((node_id, definition_id))
-                        # Register return edge: when this function exits, return to this call node
-                        # Find the exit node for this function definition
-                        for exit_id in self.cfg.exit_node_ids:
-                            exit_node = self.cfg.nodes.get(exit_id)
-                            if exit_node and exit_node.source_text == definition_name:
-                                self.context.register_function_call_return(
-                                    exit_id, node_id
-                                )
-                        break
             node.metadata = CFGNodeMetadata(
-                function_calls=function_calls,
+                function_calls=self.get_calls(node.ast_node),
                 variable_definitions=self.get_definitions(node.ast_node),
                 variable_uses=self.get_uses(node.ast_node),
             )
-        # Link call edges
-        for a, b in call_edges:
-            self.cfg.add_edge(a, b, label="function_call")
 
         return node_id
 
@@ -247,11 +225,35 @@ class CFGVisitor(abc.ABC):
         """
         Post-process the CFG to apply transformations after the initial construction.
         Currently implements:
+        - Function call edges, linked once every function is known so a call can
+          reach a function defined later in the file
         - Passthrough for ENTRY and EXIT nodes (connecting predecessors directly to successors)
         - Function call return edges
         """
+        self._link_function_calls()
         self._add_function_call_return_edges()
         self._passthrough_entry_exit_nodes()
+
+    def _link_function_calls(self):
+        """Add a call edge from each node to every function it calls by name.
+
+        This runs after the whole tree is visited, so a function defined after
+        its caller is still linked. A name defined more than once (overloads) is
+        linked to all of its definitions, and each function's return edge goes
+        from that function's own exit.
+        """
+        entries_by_name: Dict[str, List[int]] = {}
+        for entry_id, name in self.context.function_definitions.items():
+            entries_by_name.setdefault(name, []).append(entry_id)
+        exit_by_entry = dict(zip(self.cfg.entry_node_ids, self.cfg.exit_node_ids))
+
+        for node_id, node in list(self.cfg.nodes.items()):
+            for name in dict.fromkeys(node.metadata.function_calls):
+                for entry_id in entries_by_name.get(name, []):
+                    self.cfg.add_edge(node_id, entry_id, label="function_call")
+                    exit_id = exit_by_entry.get(entry_id)
+                    if exit_id is not None:
+                        self.context.register_function_call_return(exit_id, node_id)
 
     def _add_function_call_return_edges(self):
         """Add return edges from function exits to call sites"""
