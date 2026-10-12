@@ -7,7 +7,9 @@ The endpoint coroutines are called directly, so no running server is needed.
 import asyncio
 
 import pytest
+from pydantic import ValidationError
 
+from tree_climber.language_registry import DEFAULT_LANGUAGE
 from tree_climber.viz.app import (
     ParseRequest,
     health_check,
@@ -59,3 +61,14 @@ def test_parse_endpoint(language, source):
     assert response.ast is not None
     assert response.dfg is not None
     assert response.dfg["edges"], "x = 42 should reach its use in the return"
+
+
+def test_unsupported_language_is_rejected():
+    with pytest.raises(ValidationError, match="Unsupported language: cobol"):
+        ParseRequest.model_validate({"source_code": C_SOURCE, "language": "cobol"})
+
+
+def test_language_defaults_to_registry_default():
+    request = ParseRequest.model_validate({"source_code": C_SOURCE})
+
+    assert request.language == DEFAULT_LANGUAGE

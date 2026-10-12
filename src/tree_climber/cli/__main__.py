@@ -29,7 +29,7 @@ from tree_climber.cli.source import (
     is_stdin_available,
     read_stdin,
 )
-from tree_climber.cli.visualizers.constants import SUPPORTED_LANGUAGES
+from tree_climber.language_registry import SUPPORTED_LANGUAGES
 
 # Create the main Typer app
 app = typer.Typer(

@@ -7,6 +7,8 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Optional
 
+from tree_climber.language_registry import language_for_extension
+
 
 class CodeSource(ABC):
     """Abstract base class for code sources (file or clipboard)."""
@@ -59,13 +61,7 @@ class FileSource(CodeSource):
 
     def get_language_hint(self) -> Optional[str]:
         """Auto-detect language from file extension."""
-        suffix = self.file_path.suffix.lower()
-        extension_map = {
-            ".c": "c",
-            ".h": "c",
-            ".java": "java",
-        }
-        return extension_map.get(suffix)
+        return language_for_extension(self.file_path.suffix)
 
     def get_output_dir(self) -> Path:
         """Return the parent directory of the file."""
