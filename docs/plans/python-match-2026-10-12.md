@@ -29,7 +29,7 @@ Classes, nested functions, lambdas, decorators (#10); comprehensions (#11). Exce
 
 ## Results
 
-Executive summary: Python CFGs now model `match`/`case`. `ruff format --check`, `ruff check`, `pyright`, `pytest` pass (524 passed, 20 strict xfails; was 463 + 3 on master).
+Executive summary: Python CFGs now model `match`/`case`. `ruff format --check`, `ruff check`, `pyright`, `pytest` pass (524 passed, 20 strict xfails; was 463 on master).
 
 - `visit_match_statement` in `python.py` implements the design above; `collect_pattern_bindings` and `is_irrefutable_pattern` are in `python_bindings.py`.
 - Design change made while testing: the first draft defined captured names on the case test node. That kills earlier definitions on the no-match path, so `x = 0; match s: case [x]: ...; print(x)` lost its `x = 0 => print(x)` chain. Captures now live on a `capture` node on the `true` edge, and a test covers exactly this case.
