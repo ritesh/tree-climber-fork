@@ -93,35 +93,37 @@ class PythonCFGVisitor(CFGVisitor):
             return get_source_text(attribute) if attribute else None
         return None
 
-    def get_calls(self, ast_node: Node) -> List[str]:
-        """Extract called function names under an AST node.
+    @staticmethod
+    def call_nodes(ast_node: Node) -> Iterator[Node]:
+        """The `call` nodes that run when the node executes, in source order.
 
-        `foo()` records `foo`; `obj.method()` and `pkg.fn()` record the final
-        attribute name. Other callees, such as `f()()`, record nothing for the
-        outer call.
-
-        Only calls that run when the node executes are counted. A function's
-        body does not run when it is defined, so it is skipped; its decorators,
-        default values, and annotations are evaluated then, so they count. A
-        class body does run at definition time, so it counts, minus its methods'
-        bodies. Lambda bodies count, since they usually run during the
+        A function's body does not run when it is defined, so it is skipped; its
+        decorators, default values, and annotations are evaluated then, so they
+        count. A class body does run at definition time, so it counts, minus its
+        methods' bodies. Lambda bodies count, since they usually run during the
         statement that creates them (`sorted(xs, key=lambda x: f(x))`).
         """
-        calls: List[str] = []
         stack = [ast_node]
         while stack:
             node = stack.pop()
             if node.type == "call":
-                name = self._callee_name(node)
-                if name is not None:
-                    calls.append(name)
+                yield node
             children = node.children
             if node.type == "function_definition":
                 body = node.child_by_field_name("body")
                 if body is not None:
                     children = [child for child in children if child.id != body.id]
             stack.extend(reversed(children))
-        return calls
+
+    def get_calls(self, ast_node: Node) -> List[str]:
+        """Extract called function names under an AST node.
+
+        `foo()` records `foo`; `obj.method()` and `pkg.fn()` record the final
+        attribute name. Other callees, such as `f()()`, record nothing for the
+        outer call. See `call_nodes` for which calls count.
+        """
+        names = (self._callee_name(call) for call in self.call_nodes(ast_node))
+        return [name for name in names if name is not None]
 
     def get_definitions(self, ast_node: Node) -> List[str]:
         """Extract variable definitions under an AST node."""
