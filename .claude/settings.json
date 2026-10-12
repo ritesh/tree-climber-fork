@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "ruff format"
+            "command": "python3 \"${CLAUDE_PROJECT_DIR:-.}\"/.claude/hooks/format_python.py"
           }
         ]
       }
