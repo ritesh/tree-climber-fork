@@ -171,6 +171,70 @@ class TestCalls:
         assert PythonCFGVisitor().get_calls(tree.root_node) == expected
 
 
+class TestCallsThatRunWhenTheNodeRuns:
+    """Defining a function or class only runs part of what it contains."""
+
+    @pytest.mark.parametrize(
+        "source, expected",
+        [
+            ("def g():\n    helper()", []),
+            ("def outer():\n    def inner():\n        h()\n    g()", []),
+            ("@dec(arg())\ndef g():\n    h()", ["dec", "arg"]),
+            ("def g(x=default()):\n    h()", ["default"]),
+            ("class A:\n    def m(self):\n        h()", []),
+            (
+                "class A(base()):\n    x = compute()\n    def m(self):\n        h()",
+                ["base", "compute"],
+            ),
+            ("f = lambda: helper()", ["helper"]),
+            ("sorted(xs, key=lambda x: key(x))", ["sorted", "key"]),
+            ("[make(i) for i in items()]", ["make", "items"]),
+        ],
+    )
+    def test_get_calls(self, source, expected):
+        tree = parse_source_to_ast(source, "python")
+
+        assert PythonCFGVisitor().get_calls(tree.root_node) == expected
+
+    def test_a_class_with_a_method_calling_a_function_does_not_call_it(self):
+        found = edges(
+            build_cfg(
+                "def helper():\n"
+                "    pass\n"
+                "\n"
+                "class A:\n"
+                "    def m(self):\n"
+                "        helper()\n"
+            )
+        )
+
+        assert not any(
+            label in ("function_call", "function_return") for _, _, label in found
+        )
+
+    def test_a_decorated_function_does_not_call_what_its_body_calls(self):
+        found = edges(
+            build_cfg("def helper():\n    pass\n\n@dec\ndef g():\n    helper()\n")
+        )
+
+        assert not any(
+            label in ("function_call", "function_return") for _, _, label in found
+        )
+
+    def test_class_level_code_runs_when_the_class_is_defined(self):
+        found = edges(
+            build_cfg("def helper():\n    pass\n\nclass A:\n    x = helper()\n")
+        )
+
+        class_node = "class A:\n    x = helper()"
+        assert (class_node, "ENTRY:helper", "function_call") in found
+
+    def test_a_real_call_is_still_linked(self):
+        found = edges(build_cfg("def helper():\n    pass\n\nhelper()\n"))
+
+        assert ("helper()", "ENTRY:helper", "function_call") in found
+
+
 class TestUnsupportedStatements:
     """Compound statements without handlers must not break the flow."""
 

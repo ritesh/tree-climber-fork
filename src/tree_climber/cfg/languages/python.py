@@ -20,7 +20,6 @@ from typing import Iterable, Iterator, List, Optional, Set, Tuple
 from tree_sitter import Node
 
 from tree_climber.ast_utils import (
-    dfs,
     get_required_child_by_field_name,
     get_source_text,
 )
@@ -75,28 +74,47 @@ class PythonCFGVisitor(CFGVisitor):
         return node_id
 
     # AST utilities
+    @staticmethod
+    def _callee_name(call: Node) -> Optional[str]:
+        function = call.child_by_field_name("function")
+        if function is None:
+            return None
+        if function.type == "identifier":
+            return get_source_text(function)
+        if function.type == "attribute":
+            attribute = function.child_by_field_name("attribute")
+            return get_source_text(attribute) if attribute else None
+        return None
+
     def get_calls(self, ast_node: Node) -> List[str]:
         """Extract called function names under an AST node.
 
         `foo()` records `foo`; `obj.method()` and `pkg.fn()` record the final
         attribute name. Other callees, such as `f()()`, record nothing for the
         outer call.
+
+        Only calls that run when the node executes are counted. A function's
+        body does not run when it is defined, so it is skipped; its decorators,
+        default values, and annotations are evaluated then, so they count. A
+        class body does run at definition time, so it counts, minus its methods'
+        bodies. Lambda bodies count, since they usually run during the
+        statement that creates them (`sorted(xs, key=lambda x: f(x))`).
         """
-
-        def process_call(node: Node) -> Optional[str]:
-            if node.type != "call":
-                return None
-            function = node.child_by_field_name("function")
-            if function is None:
-                return None
-            if function.type == "identifier":
-                return get_source_text(function)
-            if function.type == "attribute":
-                attribute = function.child_by_field_name("attribute")
-                return get_source_text(attribute) if attribute else None
-            return None
-
-        return dfs(ast_node, process_call)
+        calls: List[str] = []
+        stack = [ast_node]
+        while stack:
+            node = stack.pop()
+            if node.type == "call":
+                name = self._callee_name(node)
+                if name is not None:
+                    calls.append(name)
+            children = node.children
+            if node.type == "function_definition":
+                body = node.child_by_field_name("body")
+                if body is not None:
+                    children = [child for child in children if child.id != body.id]
+            stack.extend(reversed(children))
+        return calls
 
     def get_definitions(self, ast_node: Node) -> List[str]:
         """Extract variable definitions under an AST node."""
