@@ -177,12 +177,14 @@ class TestUnsupportedStatements:
     def test_flow_stays_connected_through_unsupported_statements(self):
         cfg = build_cfg(
             "x = 1\n"
-            "if x:\n"
+            "with ctx:\n"
             "    y = 2\n"
             "class A:\n"
             "    z = 3\n"
-            "for i in range(3):\n"
-            "    print(i)\n"
+            "try:\n"
+            "    pass\n"
+            "except E:\n"
+            "    pass\n"
             "w = 4\n"
         )
 

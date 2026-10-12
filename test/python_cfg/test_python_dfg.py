@@ -5,28 +5,7 @@ Chains are described by node text, as {definition: [uses]}, so the tests read
 like the code they analyze.
 """
 
-from typing import Dict, List
-
-from cfg_helpers import build_cfg, label
-
-from tree_climber.cfg.visitor import CFG
-from tree_climber.dataflow.analyses.def_use import DefUseSolver
-from tree_climber.dataflow.analyses.reaching_definitions import (
-    ReachingDefinitionsProblem,
-)
-from tree_climber.dataflow.solver import RoundRobinSolver
-
-
-def def_use_chains(code: str, variable: str) -> Dict[str, List[str]]:
-    cfg: CFG = build_cfg(code)
-    reaching = RoundRobinSolver().solve(cfg, ReachingDefinitionsProblem())
-    result = DefUseSolver().solve(cfg, reaching)
-    return {
-        label(cfg.nodes[chain.definition]): sorted(
-            label(cfg.nodes[use]) for use in chain.uses
-        )
-        for chain in result.chains.get(variable, [])
-    }
+from cfg_helpers import def_use_chains
 
 
 def test_redefinition_in_straight_line_code():

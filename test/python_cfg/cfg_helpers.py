@@ -1,10 +1,15 @@
 """Helpers shared by the Python CFG and def/use tests."""
 
-from typing import List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 from tree_climber.cfg.builder import CFGBuilder
 from tree_climber.cfg.cfg_types import CFGNode, NodeType
 from tree_climber.cfg.visitor import CFG
+from tree_climber.dataflow.analyses.def_use import DefUseSolver
+from tree_climber.dataflow.analyses.reaching_definitions import (
+    ReachingDefinitionsProblem,
+)
+from tree_climber.dataflow.solver import RoundRobinSolver
 
 Edge = Tuple[str, str, Optional[str]]
 
@@ -50,3 +55,16 @@ def reachable_from(cfg: CFG, start_id: int) -> Set[int]:
 
 def entry_names(cfg: CFG) -> List[str]:
     return [cfg.nodes[entry_id].source_text for entry_id in cfg.entry_node_ids]
+
+
+def def_use_chains(code: str, variable: str) -> Dict[str, List[str]]:
+    """Def-use chains of a variable as {definition text: sorted use texts}."""
+    cfg = build_cfg(code)
+    reaching = RoundRobinSolver().solve(cfg, ReachingDefinitionsProblem())
+    result = DefUseSolver().solve(cfg, reaching)
+    return {
+        label(cfg.nodes[chain.definition]): sorted(
+            label(cfg.nodes[use]) for use in chain.uses
+        )
+        for chain in result.chains.get(variable, [])
+    }
