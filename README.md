@@ -12,7 +12,7 @@ Tree Climber is a comprehensive static analysis framework for generating Control
 
 - **C**: CFG generation with control structures, loops, and functions
 - **Java**: CFG generation for Java language constructs
-- **Python**: Module-level code and functions, `if`/`while`/`for` (with `break`, `continue`, and loop `else`), `match`, `try`/`except`/`finally`, `raise`, and `with`. Classes, decorated and nested functions are each treated as a single opaque statement for now. See the [Python guide](./docs/python-guide.md).
+- **Python**: Module-level code and functions, `if`/`while`/`for` (with `break`, `continue`, and loop `else`), `match`, `try`/`except`/`finally`, `raise`, `with`, nested functions, classes and methods, and decorators. Comprehensions and generators stay inside their statement for now, and closures are not connected across scopes. See the [Python guide](./docs/python-guide.md).
 - **Extensible**: Framework designed to easily add new language support
 
 Run `tree-climber --list-languages` to see what your install supports.
@@ -140,7 +140,7 @@ The FastAPI backend provides the following endpoints:
 
 - The analysis is intraprocedural; function calls are linked to functions of the same name in the same file.
 - Variable updates through fields, subscripts, and pointers are approximated, because the dataflow framework only supports strong updates.
-- Python: classes, decorated and nested functions, lambdas, and comprehensions are not analyzed in detail yet. See the [Python guide](./docs/python-guide.md).
+- Python: comprehensions and generators are not analyzed in detail yet, and a nested function's reads of enclosing variables are not connected to their definitions. See the [Python guide](./docs/python-guide.md).
 - C and Java: see the [limitations section of the language extension guide](./docs/plans/extending-languages.md).
 
 ## Development

@@ -196,7 +196,7 @@ class TestCallsThatRunWhenTheNodeRuns:
 
         assert PythonCFGVisitor().get_calls(tree.root_node) == expected
 
-    def test_a_class_with_a_method_calling_a_function_does_not_call_it(self):
+    def test_a_class_does_not_call_what_its_methods_call(self):
         found = edges(
             build_cfg(
                 "def helper():\n"
@@ -208,8 +208,10 @@ class TestCallsThatRunWhenTheNodeRuns:
             )
         )
 
+        assert ("helper()", "ENTRY:helper", "function_call") in found
         assert not any(
-            label in ("function_call", "function_return") for _, _, label in found
+            source == "class A" and label == "function_call"
+            for source, _, label in found
         )
 
     def test_a_decorated_function_does_not_call_what_its_body_calls(self):
@@ -217,8 +219,10 @@ class TestCallsThatRunWhenTheNodeRuns:
             build_cfg("def helper():\n    pass\n\n@dec\ndef g():\n    helper()\n")
         )
 
+        assert ("helper()", "ENTRY:helper", "function_call") in found
         assert not any(
-            label in ("function_call", "function_return") for _, _, label in found
+            source == "@dec\ndef g()" and label == "function_call"
+            for source, _, label in found
         )
 
     def test_class_level_code_runs_when_the_class_is_defined(self):
@@ -226,8 +230,7 @@ class TestCallsThatRunWhenTheNodeRuns:
             build_cfg("def helper():\n    pass\n\nclass A:\n    x = helper()\n")
         )
 
-        class_node = "class A:\n    x = helper()"
-        assert (class_node, "ENTRY:helper", "function_call") in found
+        assert ("class A", "ENTRY:helper", "function_call") in found
 
     def test_a_real_call_is_still_linked(self):
         found = edges(build_cfg("def helper():\n    pass\n\nhelper()\n"))
@@ -235,20 +238,24 @@ class TestCallsThatRunWhenTheNodeRuns:
         assert ("helper()", "ENTRY:helper", "function_call") in found
 
 
-class TestUnsupportedStatements:
-    """Compound statements without handlers must not break the flow."""
+class TestDefinitionsInTheModuleFlow:
+    """Classes and decorated functions are statements of the module flow; their
+    bodies are separate subgraphs."""
 
-    def test_flow_stays_connected_through_unsupported_statements(self):
+    def test_flow_stays_connected_through_definitions(self):
         cfg = build_cfg(
             "x = 1\nclass A:\n    z = 3\n@decorator\ndef g():\n    pass\nw = 4\n"
         )
 
-        module_entry = cfg.entry_node_ids[0]
-        module_exit = cfg.exit_node_ids[0]
-        reachable = reachable_from(cfg, module_entry)
-        assert reachable == set(cfg.nodes)
-        assert module_exit in reachable
-        assert len(cfg.nodes) == 6
+        assert edges(cfg) == {
+            ("ENTRY:<module>", "x = 1", None),
+            ("x = 1", "class A", None),
+            ("class A", "@decorator\ndef g()", None),
+            ("@decorator\ndef g()", "w = 4", None),
+            ("w = 4", "EXIT:<module>", None),
+            ("ENTRY:g", "pass", None),
+            ("pass", "EXIT:g", None),
+        }
 
 
 class TestFixtureFile:
