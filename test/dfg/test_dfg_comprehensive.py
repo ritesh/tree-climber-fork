@@ -629,236 +629,145 @@ class TestInterproceduralAnalysis:
         )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="Expects a++ to be a self-reference outside loops, which reaching "
-    "definitions does not produce; convention is undecided",
-)
 class TestIncrementOperators:
-    """Test increment and decrement operator def-use behavior."""
+    """Test increment and decrement operator def-use behavior.
+
+    An increment both uses and defines its variable. The value it defines can
+    only reach the same increment on a later loop iteration, so a self-reference
+    appears in loops but not in straight-line code.
+    """
 
     @pytest.fixture(params=["c", "java"])
     def helper(self, request):
         return DFGTestHelper(request.param)
 
-    def test_postfix_increment_self_reference(self, helper):
-        """Test that a++ should point to itself in def-use chains."""
+    @staticmethod
+    def _wrap(helper, c_body, java_body):
         if helper.language == "c":
-            code = """
-            int main() {
-                int a = 5;
-                a++;
-                return a;
-            }
-            """
-        else:  # java
-            code = """
-            public class Test {
-                public static int main() {
-                    int a = 5;
-                    a++;
-                    return a;
-                }
-            }
-            """
+            return f"int main() {{\n{c_body}\n}}"
+        return f"public class Test {{\npublic static int main() {{\n{java_body}\n}}\n}}"
 
-        cfg, def_use_result, use_def_result = helper.build_dfg_from_code(code)
+    @staticmethod
+    def _chains_by_text(cfg, def_use_result, variable):
+        """Map each definition's source text to the source texts of its uses."""
+        return {
+            cfg.nodes[chain.definition].source_text.strip(): [
+                cfg.nodes[use].source_text.strip() for use in chain.uses
+            ]
+            for chain in def_use_result.chains.get(variable, [])
+        }
 
-        # Debug the current chains
-        helper.debug_dfg_chains(
-            cfg, def_use_result, use_def_result, "Postfix increment test"
+    @staticmethod
+    def _node_id(cfg, text):
+        matches = [
+            node_id
+            for node_id, node in cfg.nodes.items()
+            if node.source_text.strip() == text
+        ]
+        assert len(matches) == 1, f"Expected exactly one node '{text}', got {matches}"
+        return matches[0]
+
+    def test_postfix_increment_straight_line(self, helper):
+        """a++ uses the prior definition and defines the one that reaches the return."""
+        code = self._wrap(
+            helper,
+            "int a = 5; a++; return a;",
+            "int a = 5; a++; return a;",
         )
 
-        # a++ should create a def-use chain where the increment definition points to itself
-        a_chains = def_use_result.chains.get("a", [])
-        assert len(a_chains) >= 1, (
-            f"Expected at least 1 def-use chain for a, got {len(a_chains)}"
+        cfg, def_use_result, _ = helper.build_dfg_from_code(code)
+
+        assert self._chains_by_text(cfg, def_use_result, "a") == {
+            "int a = 5;": ["a++;"],
+            "a++;": ["return a;"],
+        }
+
+    def test_prefix_increment_straight_line(self, helper):
+        """++a uses the prior definition and defines the one that reaches the return."""
+        code = self._wrap(
+            helper,
+            "int a = 5; ++a; return a;",
+            "int a = 5; ++a; return a;",
         )
 
-        # Look for the increment chain that should point to itself
-        increment_chain = None
-        for chain in a_chains:
-            def_node = cfg.nodes.get(chain.definition)
-            def_text = def_node.source_text.strip() if def_node else ""
-            if "++" in def_text:
-                increment_chain = chain
-                break
+        cfg, def_use_result, _ = helper.build_dfg_from_code(code)
 
-        assert increment_chain is not None, (
-            "Should find def-use chain for a++ increment"
-        )
-
-        # The increment should point to its own use (self-reference)
-        # For C: a++ should point to itself AND to uses of a
-        # For Java: a++ should point to itself
-        increment_def_id = increment_chain.definition
-        assert increment_def_id in increment_chain.uses, (
-            "a++ should have a self-reference (definition should be in its own uses)"
-        )
-
-    def test_prefix_increment_self_reference(self, helper):
-        """Test that ++a should point to itself in def-use chains."""
-        if helper.language == "c":
-            code = """
-            int main() {
-                int a = 5;
-                ++a;
-                return a;
-            }
-            """
-        else:  # java
-            code = """
-            public class Test {
-                public static int main() {
-                    int a = 5;
-                    ++a;
-                    return a;
-                }
-            }
-            """
-
-        cfg, def_use_result, use_def_result = helper.build_dfg_from_code(code)
-
-        # Debug the current chains
-        helper.debug_dfg_chains(
-            cfg, def_use_result, use_def_result, "Prefix increment test"
-        )
-
-        # ++a should create a def-use chain where the increment definition points to itself
-        a_chains = def_use_result.chains.get("a", [])
-        assert len(a_chains) >= 1, (
-            f"Expected at least 1 def-use chain for a, got {len(a_chains)}"
-        )
-
-        # Look for the increment chain
-        increment_chain = None
-        for chain in a_chains:
-            def_node = cfg.nodes.get(chain.definition)
-            def_text = def_node.source_text.strip() if def_node else ""
-            if "++" in def_text:
-                increment_chain = chain
-                break
-
-        assert increment_chain is not None, (
-            "Should find def-use chain for ++a increment"
-        )
-
-        # The increment should point to its own use (self-reference)
-        increment_def_id = increment_chain.definition
-        assert increment_def_id in increment_chain.uses, (
-            "++a should have a self-reference"
-        )
+        assert self._chains_by_text(cfg, def_use_result, "a") == {
+            "int a = 5;": ["++a;"],
+            "++a;": ["return a;"],
+        }
 
     def test_increment_in_expression(self, helper):
-        """Test increment operators within expressions."""
-        if helper.language == "c":
-            code = """
-            int main() {
-                int a = 5;
-                int b = a++ + 1;
-                return b;
-            }
-            """
-        else:  # java
-            code = """
-            public class Test {
-                public static int main() {
-                    int a = 5;
-                    int b = a++ + 1;
-                    return b;
-                }
-            }
-            """
-
-        cfg, def_use_result, use_def_result = helper.build_dfg_from_code(code)
-
-        # Debug the current chains
-        helper.debug_dfg_chains(
-            cfg, def_use_result, use_def_result, "Increment in expression test"
+        """An increment inside an expression still uses and defines its variable."""
+        code = self._wrap(
+            helper,
+            "int a = 5; int b = a++ + 1; return b;",
+            "int a = 5; int b = a++ + 1; return b;",
         )
 
-        # Find the node that contains the increment (should define and use 'a')
-        increment_node = None
-        for node_id, node in cfg.nodes.items():
-            if (
-                "++" in node.source_text
-                and "a" in node.metadata.variable_definitions
-                and "a" in node.metadata.variable_uses
-            ):
-                increment_node = node_id
-                break
+        cfg, def_use_result, _ = helper.build_dfg_from_code(code)
 
-        assert increment_node is not None, "Should find node with increment operation"
+        increment_node = self._node_id(cfg, "int b = a++ + 1;")
+        metadata = cfg.nodes[increment_node].metadata
+        assert "a" in metadata.variable_definitions
+        assert "a" in metadata.variable_uses
 
-        # Find the def-use chain for 'a' from the increment node
-        a_chains = def_use_result.chains.get("a", [])
-        increment_chain = None
-        for chain in a_chains:
-            if chain.definition == increment_node:
-                increment_chain = chain
-                break
-
-        assert increment_chain is not None, "Should find def-use chain for increment"
-        assert increment_node in increment_chain.uses, (
-            "a++ should have self-reference even in expressions"
+        chains = self._chains_by_text(cfg, def_use_result, "a")
+        assert chains == {"int a = 5;": ["int b = a++ + 1;"]}, (
+            "The new value of a is never read, so the increment has no outgoing chain"
         )
 
-    def test_multiple_increments(self, helper):
-        """Test multiple increment operations on the same variable."""
-        if helper.language == "c":
-            code = """
-            int main() {
-                int a = 5;
-                a++;
-                ++a;
-                a--;
-                return a;
-            }
-            """
-        else:  # java
-            code = """
-            public class Test {
-                public static int main() {
-                    int a = 5;
-                    a++;
-                    ++a;
-                    a--;
-                    return a;
-                }
-            }
-            """
-
-        cfg, def_use_result, use_def_result = helper.build_dfg_from_code(code)
-
-        # Debug the current chains
-        helper.debug_dfg_chains(
-            cfg, def_use_result, use_def_result, "Multiple increments test"
+    def test_multiple_increments_chain_in_order(self, helper):
+        """Successive increments and decrements each feed only the next one."""
+        code = self._wrap(
+            helper,
+            "int a = 5; a++; ++a; a--; return a;",
+            "int a = 5; a++; ++a; a--; return a;",
         )
 
-        # Should have multiple def-use chains for a
-        a_chains = def_use_result.chains.get("a", [])
-        assert len(a_chains) >= 3, (
-            f"Expected at least 3 def-use chains for a (initial + increments), got {len(a_chains)}"
+        cfg, def_use_result, _ = helper.build_dfg_from_code(code)
+
+        assert self._chains_by_text(cfg, def_use_result, "a") == {
+            "int a = 5;": ["a++;"],
+            "a++;": ["++a;"],
+            "++a;": ["a--;"],
+            "a--;": ["return a;"],
+        }
+
+    def test_increment_in_while_loop_references_itself(self, helper):
+        """In a loop, the value a++ defines reaches the next iteration's a++."""
+        code = self._wrap(
+            helper,
+            "int a = 0; while (a < 10) { a++; } return a;",
+            "int a = 0; while (a < 10) { a++; } return a;",
         )
 
-        # Each increment/decrement should have self-reference
-        increment_chains = []
-        for chain in a_chains:
-            def_node = cfg.nodes.get(chain.definition)
-            def_text = def_node.source_text.strip() if def_node else ""
-            if "++" in def_text or "--" in def_text:
-                increment_chains.append(chain)
+        cfg, def_use_result, _ = helper.build_dfg_from_code(code)
 
-        assert len(increment_chains) >= 3, (
-            f"Expected at least 3 increment/decrement chains, got {len(increment_chains)}"
+        increment = self._node_id(cfg, "a++;")
+        increment_chain = next(
+            chain
+            for chain in def_use_result.chains["a"]
+            if chain.definition == increment
+        )
+        assert increment in increment_chain.uses, "a++ should reach itself via the loop"
+
+        use_texts = {cfg.nodes[use].source_text.strip() for use in increment_chain.uses}
+        assert use_texts == {"(a < 10)", "a++;", "return a;"}
+
+    def test_increment_in_for_loop_references_itself(self, helper):
+        """In a for loop, i++ reaches itself and the loop condition."""
+        code = self._wrap(
+            helper,
+            "for (int i = 0; i < 3; i++) { } return 0;",
+            "for (int i = 0; i < 3; i++) { } return 0;",
         )
 
-        # Each increment chain should have self-reference
-        for chain in increment_chains:
-            increment_def_id = chain.definition
-            assert increment_def_id in chain.uses, (
-                f"Increment/decrement at node {increment_def_id} should have self-reference"
-            )
+        cfg, def_use_result, _ = helper.build_dfg_from_code(code)
+
+        chains = self._chains_by_text(cfg, def_use_result, "i")
+        assert set(chains["i++"]) == {"i < 3", "i++"}
+        assert set(chains["int i = 0;"]) == {"i < 3", "i++"}
 
 
 class TestComplexDataflow:
