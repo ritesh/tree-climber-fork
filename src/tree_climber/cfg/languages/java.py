@@ -150,8 +150,8 @@ class JavaCFGVisitor(CFGVisitor):
         return node.type.endswith("_statement") and node.type not in non_linear_types
 
     # Basic visitor methods
-    def visit_program(self, node: Node) -> CFGTraversalResult:
-        """Visit the root program node"""
+    def visit_program(self, node: Node) -> Optional[CFGTraversalResult]:
+        """Visit the root program node; None if it has no classes"""
         first_entry = None
         last_exits = None
         for child in node.children:
@@ -161,12 +161,8 @@ class JavaCFGVisitor(CFGVisitor):
                     first_entry = result.entry_node_id
                 last_exits = result.exit_node_ids
 
-        assert first_entry is not None, (
-            "Translation unit must have at least one entry node"
-        )
-        assert last_exits is not None, (
-            "Translation unit must have at least one exit node"
-        )
+        if first_entry is None or last_exits is None:
+            return None
         return CFGTraversalResult(
             entry_node_id=first_entry,
             exit_node_ids=last_exits,
