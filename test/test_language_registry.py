@@ -15,6 +15,7 @@ from tree_sitter_languages import get_parser
 from tree_climber.cfg.builder import CFGBuilder
 from tree_climber.cfg.languages.c import CCFGVisitor
 from tree_climber.cfg.languages.java import JavaCFGVisitor
+from tree_climber.cfg.languages.python import PythonCFGVisitor
 from tree_climber.cfg.visitor import CFGVisitor
 from tree_climber.cli import DEFAULT_LANGUAGE as CLI_DEFAULT_LANGUAGE
 from tree_climber.cli import SUPPORTED_LANGUAGES as CLI_SUPPORTED_LANGUAGES
@@ -31,7 +32,7 @@ from tree_climber.viz.app import app, root
 
 
 def test_registry_contents():
-    assert {"c", "java"} <= set(LANGUAGES)
+    assert {"c", "java", "python"} <= set(LANGUAGES)
     assert SUPPORTED_LANGUAGES == list(LANGUAGES)
     assert DEFAULT_LANGUAGE in LANGUAGES
 
@@ -68,6 +69,7 @@ class TestEachRegisteredLanguage:
 def test_visitor_classes():
     assert isinstance(create_visitor("c"), CCFGVisitor)
     assert isinstance(create_visitor("java"), JavaCFGVisitor)
+    assert isinstance(create_visitor("python"), PythonCFGVisitor)
 
 
 def test_no_extension_is_claimed_by_two_languages():
@@ -88,6 +90,9 @@ def test_no_extension_is_claimed_by_two_languages():
         (".C", "c"),
         (".java", "java"),
         (".JAVA", "java"),
+        (".py", "python"),
+        (".pyi", "python"),
+        (".PY", "python"),
         (".txt", None),
         ("", None),
     ],
@@ -98,7 +103,13 @@ def test_language_for_extension(suffix, expected):
 
 @pytest.mark.parametrize(
     "filename, expected",
-    [("prog.c", "c"), ("prog.h", "c"), ("Main.JAVA", "java"), ("notes.txt", None)],
+    [
+        ("prog.c", "c"),
+        ("prog.h", "c"),
+        ("Main.JAVA", "java"),
+        ("script.py", "python"),
+        ("notes.txt", None),
+    ],
 )
 def test_file_source_language_hint(filename, expected):
     assert FileSource(Path("somewhere") / filename).get_language_hint() == expected
