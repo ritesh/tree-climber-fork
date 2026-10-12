@@ -133,8 +133,10 @@ def typer_main(
     ] = None,
     show: Annotated[
         bool,
-        typer.Option("--show", help="Display visualizations interactively"),
-    ] = True,
+        typer.Option(
+            "--show", help="Open the saved visualizations in the default image viewer"
+        ),
+    ] = False,
     # Verbosity and debugging
     verbose: Annotated[
         bool,

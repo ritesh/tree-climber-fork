@@ -90,18 +90,32 @@ def analyze_source_code(source: CodeSource, options: AnalysisOptions) -> None:
             def_use_result = _analyze_dataflow(cfg)
 
     visualizer_options = (source, options, ast_root, cfg, def_use_result)
+    saved_paths = []
     if options.draw_ast:
         with AnalysisTimer("AST visualization", options.timing, options.verbose):
-            ASTVisualizer(*visualizer_options).visualize()
+            visualizer = ASTVisualizer(*visualizer_options)
+            visualizer.visualize()
+            saved_paths.append(visualizer.output_path("ast"))
     if options.draw_cfg:
         with AnalysisTimer("CFG visualization", options.timing, options.verbose):
-            CFGVisualizer(*visualizer_options).visualize()
+            visualizer = CFGVisualizer(*visualizer_options)
+            visualizer.visualize()
+            saved_paths.append(visualizer.output_path("cfg"))
     if options.draw_dfg:
         with AnalysisTimer("DFG visualization", options.timing, options.verbose):
-            DFGVisualizer(*visualizer_options).visualize()
+            visualizer = DFGVisualizer(*visualizer_options)
+            visualizer.visualize()
+            saved_paths.append(visualizer.output_path("dfg"))
     if options.draw_cpg:
         with AnalysisTimer("CPG visualization", options.timing, options.verbose):
-            SUPPORTED_LAYOUTS[options.layout](*visualizer_options).visualize()
+            visualizer = SUPPORTED_LAYOUTS[options.layout](*visualizer_options)
+            visualizer.visualize()
+            saved_paths.append(visualizer.output_path("cpg"))
+
+    if options.show:
+        for path in saved_paths:
+            if typer.launch(str(path)) != 0:
+                typer.echo(f"Warning: could not open {path}", err=True)
 
     if not options.quiet:
         typer.echo("✨ Analysis complete!")

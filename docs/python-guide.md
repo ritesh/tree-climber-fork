@@ -47,7 +47,7 @@ This writes `out/classify.py_cfg.png` (CFG with dashed red def-use edges) and `o
 
 `--draw-ast` and `--draw-cpg` (add `-L bigraph` for the alternate layout) work too. Code can come from stdin: `cat classify.py | uv run tree-climber - -l python --draw-cfg`.
 
-`--show` is on by default and cannot be switched off; in a headless shell the images are still saved.
+Add `--show` to open the saved images in your default image viewer; without it the images are only saved.
 
 ## 2. Dump the graph as text
 
