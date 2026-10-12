@@ -67,23 +67,85 @@ class CCFGVisitor(CFGVisitor):
 
         return dfs(ast_node, process_call)
 
+    DECLARATOR_WRAPPERS = (
+        "pointer_declarator",
+        "array_declarator",
+        "parenthesized_declarator",
+        "function_declarator",
+    )
+
+    @staticmethod
+    def _wrapped_declarator(wrapper: Node) -> Optional[Node]:
+        """The declarator inside `*p`, `a[n]`, `f(...)`, or `(...)`.
+
+        A parenthesized declarator has no field name for its content.
+        """
+        if wrapper.type == "parenthesized_declarator":
+            return wrapper.named_children[0] if wrapper.named_children else None
+        return wrapper.child_by_field_name("declarator")
+
+    @classmethod
+    def _declared_identifier(cls, declarator: Optional[Node]) -> Optional[Node]:
+        """The name declared by a declarator, through `*p`, `a[n]`, and `(*fp)(...)`."""
+        node = declarator
+        while node is not None and node.type != "identifier":
+            if node.type not in cls.DECLARATOR_WRAPPERS:
+                return None
+            node = cls._wrapped_declarator(node)
+        return node
+
+    @classmethod
+    def _is_declared_name(cls, node: Node) -> bool:
+        """True if an identifier is the name being declared, not a use."""
+        current = node
+        parent = current.parent
+        while parent is not None and parent.type in cls.DECLARATOR_WRAPPERS:
+            declarator = cls._wrapped_declarator(parent)
+            if declarator is None or declarator.id != current.id:
+                return False
+            current, parent = parent, parent.parent
+        if parent is None or parent.type not in (
+            "init_declarator",
+            "declaration",
+            "parameter_declaration",
+        ):
+            return False
+        declarator = parent.child_by_field_name("declarator")
+        return declarator is not None and declarator.id == current.id
+
+    @staticmethod
+    def _written_variable(target: Optional[Node]) -> Optional[str]:
+        """The variable an assignment target writes to.
+
+        A name, `s.f`, and `a[i]` write to the root variable (the last two are
+        weak updates: the variable is also used). A write through a pointer,
+        `p->f` or `*p`, changes the pointee and not `p`, so it writes nothing.
+        """
+        node = target
+        while node is not None:
+            if node.type == "identifier":
+                return get_source_text(node)
+            if node.type == "subscript_expression" or (
+                node.type == "field_expression"
+                and not any(child.type == "->" for child in node.children)
+            ):
+                node = node.child_by_field_name("argument")
+            else:
+                return None
+        return None
+
     def get_definitions(self, ast_node: Node) -> List[str]:
         """Extract variable definitions under an AST node."""
 
         def process_definition(node: Node) -> Optional[str]:
             if node.type == "init_declarator":
-                for child in node.children:
-                    if child.type == "identifier":
-                        return child.text.decode()
+                name = self._declared_identifier(node.child_by_field_name("declarator"))
+                return get_source_text(name) if name else None
             elif node.type == "assignment_expression":
-                for child in node.children:
-                    if child.type == "identifier":
-                        return child.text.decode()
+                return self._written_variable(node.child_by_field_name("left"))
             elif node.type == "update_expression":
                 # Handle increment/decrement operators like a++, ++a, a--, --a
-                for child in node.children:
-                    if child.type == "identifier":
-                        return child.text.decode()
+                return self._written_variable(node.child_by_field_name("argument"))
             return None
 
         return dfs(ast_node, process_definition)
@@ -93,6 +155,8 @@ class CCFGVisitor(CFGVisitor):
 
         def process_use(node: Node) -> Optional[str]:
             if node.type == "identifier":
+                if self._is_declared_name(node):
+                    return None
                 # Skip identifiers in assignment left-hand side or function definition
                 if node.parent:
                     # Skip identifiers in various contexts where they're not "uses"
@@ -198,21 +262,11 @@ class CCFGVisitor(CFGVisitor):
         for param in parameter_list.children:
             match param.type:
                 case "parameter_declaration":
-                    # Get the declarator within the parameter
-                    declarator_child = get_child_by_field_name(param, "declarator")
-                    if declarator_child:
-                        # For simple identifiers
-                        if declarator_child.type == "identifier":
-                            param_name = get_source_text(declarator_child)
-                            parameters.append(param_name)
-                        # For pointer declarators
-                        elif declarator_child.type == "pointer_declarator":
-                            # Find the identifier within the pointer declarator
-                            for grandchild in declarator_child.children:
-                                if grandchild.type == "identifier":
-                                    param_name = get_source_text(grandchild)
-                                    parameters.append(param_name)
-                                    break
+                    name = self._declared_identifier(
+                        get_child_by_field_name(param, "declarator")
+                    )
+                    if name:
+                        parameters.append(get_source_text(name))
                 case _:
                     # Skip punctuation and other non-parameter elements
                     if param.is_named and not param.type == "comment":
