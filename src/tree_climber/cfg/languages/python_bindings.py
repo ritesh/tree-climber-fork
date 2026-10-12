@@ -66,6 +66,39 @@ def collect_for_header_bindings(node: Node) -> Bindings:
     return collector.bindings
 
 
+def collect_pattern_bindings(patterns: Iterable[Node]) -> Bindings:
+    """Bindings of the `case` patterns of one clause: the names they capture, and
+    the names they read (classes and dotted value patterns such as `Color.RED`).
+
+    A bare name captures; a dotted name is a value to compare against.
+    """
+    collector = _Collector()
+    for pattern in patterns:
+        collector.pattern(pattern)
+    return collector.bindings
+
+
+def is_irrefutable_pattern(pattern: Node) -> bool:
+    """True if a `case` pattern matches any subject: `_`, a capture name, a
+    parenthesized one, or an `as` / `|` pattern containing one."""
+    named = pattern.named_children
+    match pattern.type:
+        case "case_pattern":
+            if not named:
+                return get_source_text(pattern) == "_"
+            return len(named) == 1 and is_irrefutable_pattern(named[0])
+        case "dotted_name":
+            return len(named) == 1
+        case "tuple_pattern":
+            is_group = len(named) == 1 and all(c.type != "," for c in pattern.children)
+            return is_group and is_irrefutable_pattern(named[0])
+        case "as_pattern":
+            return any(is_irrefutable_pattern(child) for child in named[:1])
+        case "union_pattern":
+            return any(is_irrefutable_pattern(child) for child in named)
+    return False
+
+
 def parameter_names(parameters: Node) -> List[str]:
     """Names bound by a `parameters` or `lambda_parameters` node."""
     names = (_parameter_name(parameter) for parameter in parameters.named_children)
@@ -166,6 +199,47 @@ class _Collector:
             self.use(name, local)
         else:
             self.visit(current, local)
+
+    def pattern(self, node: Node) -> None:
+        """Handle a `case` pattern node: names captured, and names read."""
+        match node.type:
+            case "dotted_name":
+                names = [get_source_text(child) for child in node.named_children]
+                if len(names) == 1:
+                    self.define(names[0])
+                elif names:
+                    self.use(names[0], frozenset())
+            case "splat_pattern":
+                for child in node.named_children:
+                    if child.type == "identifier":
+                        self.define(get_source_text(child))
+            case "as_pattern":
+                named = node.named_children
+                for child in named[:-1]:
+                    self.pattern(child)
+                if len(named) > 1 and named[-1].type == "identifier":
+                    self.define(get_source_text(named[-1]))
+            case "class_pattern":
+                named = node.named_children
+                if named and named[0].type == "dotted_name":
+                    root = named[0].named_children
+                    if root:
+                        self.use(get_source_text(root[0]), frozenset())
+                for child in named[1:]:
+                    self.pattern(child)
+            case "keyword_pattern":
+                for child in node.named_children[1:]:
+                    self.pattern(child)
+            case "dict_pattern":
+                for key in node.children_by_field_name("key"):
+                    if key.type == "dotted_name":
+                        self.pattern(key)
+                for child in node.named_children:
+                    if child.type == "splat_pattern" or child.type == "case_pattern":
+                        self.pattern(child)
+            case "case_pattern" | "union_pattern" | "list_pattern" | "tuple_pattern":
+                for child in node.named_children:
+                    self.pattern(child)
 
     def parameter_expressions(self, parameters: Node, local: frozenset[str]) -> None:
         """Visit the expressions in parameters: defaults and annotations."""
