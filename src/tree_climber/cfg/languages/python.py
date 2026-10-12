@@ -16,6 +16,10 @@ from tree_climber.ast_utils import (
     get_source_text,
 )
 from tree_climber.cfg.cfg_types import CFGTraversalResult, NodeType
+from tree_climber.cfg.languages.python_bindings import (
+    collect_bindings,
+    parameter_names,
+)
 from tree_climber.cfg.visitor import CFGVisitor
 
 
@@ -49,12 +53,12 @@ class PythonCFGVisitor(CFGVisitor):
         return dfs(ast_node, process_call)
 
     def get_definitions(self, ast_node: Node) -> List[str]:
-        """Extract variable definitions under an AST node (not yet implemented)."""
-        return []
+        """Extract variable definitions under an AST node."""
+        return collect_bindings(ast_node).definitions
 
     def get_uses(self, ast_node: Node) -> List[str]:
-        """Extract variable uses under an AST node (not yet implemented)."""
-        return []
+        """Extract variable uses under an AST node."""
+        return collect_bindings(ast_node).uses
 
     # Helpers
     @staticmethod
@@ -90,24 +94,6 @@ class PythonCFGVisitor(CFGVisitor):
         return CFGTraversalResult(
             entry_node_id=first_entry, exit_node_ids=current_exits
         )
-
-    def _parameter_name(self, parameter: Node) -> Optional[str]:
-        match parameter.type:
-            case "identifier":
-                return get_source_text(parameter)
-            case "default_parameter" | "typed_default_parameter":
-                name = parameter.child_by_field_name("name")
-                return get_source_text(name) if name else None
-            case "typed_parameter" | "list_splat_pattern" | "dictionary_splat_pattern":
-                inner = next(
-                    (c for c in parameter.named_children if c.type != "type"), None
-                )
-                return self._parameter_name(inner) if inner else None
-        return None
-
-    def _parameter_names(self, parameters: Node) -> List[str]:
-        names = (self._parameter_name(p) for p in parameters.named_children)
-        return [name for name in names if name]
 
     # Visitor methods
     def generic_visit(self, node: Node) -> CFGTraversalResult:
@@ -180,7 +166,7 @@ class PythonCFGVisitor(CFGVisitor):
             NodeType.ENTRY, ast_node=name_node, source_text=function_name
         )
         self.cfg.nodes[entry_id].metadata.variable_definitions.extend(
-            self._parameter_names(parameters)
+            parameter_names(parameters)
         )
         self.cfg.entry_node_ids.append(entry_id)
         self.context.push_entry(entry_id)
