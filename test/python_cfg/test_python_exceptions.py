@@ -391,6 +391,14 @@ class TestWith:
             node_by_text(cfg, "async with a as x, b()").node_type == NodeType.STATEMENT
         )
 
+    def test_async_with_exits_through_aexit(self):
+        cfg = build_cfg("async def f():\n    async with a:\n        x = 1\n    y = 2\n")
+
+        found = edges(cfg)
+        assert ("x = 1", "__aexit__", None) in found
+        assert ("__aexit__", "y = 2", None) in found
+        assert not any("__exit__" in (s, t) for s, t, _ in found)
+
     def test_with_target_is_defined_by_the_header(self):
         code = (
             "def f(p):\n"
