@@ -4,13 +4,6 @@ Constants for the Tree Climber CLI interface.
 Following the DRY principle, all constants used throughout the CLI are defined here.
 """
 
-from typing import List
-
-# Supported programming languages
-SUPPORTED_LANGUAGES: List[str] = ["c", "java"]
-DEFAULT_LANGUAGE: str = "c"
-
-
 # Visualization constants
 DEFAULT_FIGURE_SIZE: tuple[int, int] = (12, 8)
 DEFAULT_DPI: int = 300
@@ -53,12 +46,6 @@ RETURN_EDGE_LABEL: str = "return"
 
 # Graphviz constants
 SHAPE_MAP = {"s": "box", "o": "ellipse", "D": "diamond"}
-
-# File extensions mapping
-LANGUAGE_EXTENSIONS: dict[str, List[str]] = {
-    "c": [".c", ".h"],
-    "java": [".java"],
-}
 
 # Performance constants
 DEFAULT_TIMEOUT_SECONDS: int = 300  # 5 minutes

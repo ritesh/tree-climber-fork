@@ -7,12 +7,11 @@ and return their Control Flow Graph (CFG) representation in JSON format.
 import logging
 import os
 from dataclasses import asdict
-from enum import Enum
 from typing import Any, Dict, Optional
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from tree_climber.ast_utils import ast_node_to_dict
 from tree_climber.cfg.builder import CFGBuilder
@@ -21,10 +20,11 @@ from tree_climber.dataflow.analyses.reaching_definitions import (
     ReachingDefinitionsProblem,
 )
 from tree_climber.dataflow.solver import RoundRobinSolver
-
-# Constants for supported languages
-SUPPORTED_LANGUAGES = ["c", "java"]
-DEFAULT_LANGUAGE = "c"
+from tree_climber.language_registry import (
+    DEFAULT_LANGUAGE,
+    SUPPORTED_LANGUAGES,
+    get_language,
+)
 
 # CORS configuration
 CORS_ORIGINS = [
@@ -57,21 +57,21 @@ app.add_middleware(
 )
 
 
-class SupportedLanguage(str, Enum):
-    """Enumeration of supported programming languages"""
-
-    C = "c"
-    JAVA = "java"
-
-
 class ParseRequest(BaseModel):
     """Request model for parsing source code"""
 
     source_code: str = Field(..., description="The source code to parse")
-    language: SupportedLanguage = Field(
-        default=SupportedLanguage.C,
+    language: str = Field(
+        default=DEFAULT_LANGUAGE,
         description="The programming language of the source code",
+        json_schema_extra={"enum": [*SUPPORTED_LANGUAGES]},
     )
+
+    @field_validator("language")
+    @classmethod
+    def language_must_be_supported(cls, value: str) -> str:
+        get_language(value)
+        return value
 
 
 class ParseResponse(BaseModel):
@@ -128,16 +128,8 @@ async def parse_source_code(request: ParseRequest) -> ParseResponse:
             f"Parsing {len(request.source_code)} bytes of {request.language} code"
         )
 
-        # Validate language support
-        if request.language not in SUPPORTED_LANGUAGES:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Unsupported language: {request.language}. "
-                f"Supported languages: {SUPPORTED_LANGUAGES}",
-            )
-
         # Create and setup CFG builder
-        builder = CFGBuilder(request.language.value)
+        builder = CFGBuilder(request.language)
         builder.setup_parser()
         if not builder.parser:
             raise HTTPException(

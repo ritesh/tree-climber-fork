@@ -3,21 +3,8 @@ from typing import Optional
 from tree_sitter import Tree
 from tree_sitter_languages import get_parser
 
-from tree_climber.cfg.visitor import CFG, CFGVisitor
-
-
-def get_visitor(language: str) -> CFGVisitor:
-    """Get the appropriate visitor class based on the language"""
-    if language == "c":
-        from tree_climber.cfg.languages.c import CCFGVisitor
-
-        return CCFGVisitor()
-    elif language == "java":
-        from tree_climber.cfg.languages.java import JavaCFGVisitor
-
-        return JavaCFGVisitor()
-    else:
-        raise ValueError(f"Unsupported language: {language}")
+from tree_climber.cfg.visitor import CFG
+from tree_climber.language_registry import create_visitor
 
 
 class CFGBuilder:
@@ -58,7 +45,7 @@ class CFGBuilder:
             )
 
         # Create visitor and build CFG
-        visitor = get_visitor(self.language)
+        visitor = create_visitor(self.language)
         visitor.visit(root_node)
 
         visitor.postprocess_cfg()
