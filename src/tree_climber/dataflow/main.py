@@ -1,7 +1,8 @@
-from tree_climber.dataflow.analyses.def_use import DefUseSolver, UseDefSolver
+from tree_climber.dataflow.analyses.def_use import DefUseSolver
 from tree_climber.dataflow.analyses.reaching_definitions import (
     ReachingDefinitionsProblem,
 )
+from tree_climber.dataflow.analyses.use_def import UseDefSolver
 from tree_climber.dataflow.solver import RoundRobinSolver
 
 if __name__ == "__main__":

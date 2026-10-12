@@ -19,8 +19,7 @@ Author: Claude Code Assistant
 """
 
 import pytest
-from typing import List, Dict, Set, Optional, Tuple
-import tempfile
+from typing import List, Set, Optional, Tuple
 import os
 
 from tree_climber.cfg.builder import CFGBuilder
@@ -64,7 +63,7 @@ public class TestClass {{
         brace_count = 0
 
         for line in lines:
-            if f"public static" in line and method_name in line and "(" in line:
+            if "public static" in line and method_name in line and "(" in line:
                 in_method = True
                 brace_count = 0
 
@@ -915,6 +914,59 @@ class TestVariableAnalysis:
         )
 
         self.helper.assert_parameter_extraction(cfg, ["x", "y"])
+
+
+class TestPassthroughKeepsStatementsContainingElse:
+    """Statements whose text contains "else" must not be spliced out of the CFG."""
+
+    def setup_method(self):
+        self.helper = JavaCFGTestHelper()
+
+    def test_identifier_and_string_containing_else(self):
+        cfg = self.helper.build_cfg_from_method(
+            """
+            int f() {
+                int elsewhere = 1;
+                String msg = "else branch";
+                elsewhere = elsewhere + 1;
+                return elsewhere;
+            }
+            """,
+            "f",
+        )
+
+        texts = [
+            node.source_text
+            for node in cfg.nodes.values()
+            if node.node_type in (NodeType.STATEMENT, NodeType.RETURN)
+        ]
+        assert "int elsewhere = 1;" in texts
+        assert 'String msg = "else branch";' in texts
+        assert "elsewhere = elsewhere + 1;" in texts
+        assert "return elsewhere;" in texts
+
+    def test_real_else_still_removed(self):
+        cfg = self.helper.build_cfg_from_method(
+            """
+            int f(int elsewhere) {
+                if (elsewhere > 0) {
+                    elsewhere = 2;
+                } else {
+                    elsewhere = 3;
+                }
+                return elsewhere;
+            }
+            """,
+            "f",
+        )
+
+        texts = sorted(
+            node.source_text
+            for node in cfg.nodes.values()
+            if node.node_type == NodeType.STATEMENT
+        )
+        assert texts == ["elsewhere = 2;", "elsewhere = 3;"]
+        assert not any(n.source_text.startswith("EXIT:") for n in cfg.nodes.values())
 
 
 if __name__ == "__main__":

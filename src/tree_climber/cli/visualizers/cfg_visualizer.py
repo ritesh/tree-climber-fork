@@ -47,7 +47,7 @@ class CFGVisualizer(BaseVisualizer):
             for succ in node.successors:
                 lab = node.edge_labels.get(succ, "")
                 G_cfg.add_edge(node_id, succ, color="black", label=lab)
-        if options.draw_dfg:
+        if options.draw_dfg and duc_edges is not None:
             for (src, dst), names in duc_edges.items():
                 dfg_label = ", ".join(sorted(names))
                 add_dfg_edge(G_cfg, src, dst, dfg_label)

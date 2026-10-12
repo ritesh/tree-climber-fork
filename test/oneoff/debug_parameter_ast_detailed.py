@@ -89,7 +89,7 @@ def debug_parameter_structure():
                                 print(f"  Extracted pointer identifier: '{param_name}'")
                                 break
                 else:
-                    print(f"  No declarator field found in parameter_declaration")
+                    print("  No declarator field found in parameter_declaration")
 
         print(f"\nFinal extracted parameters: {parameters}")
 

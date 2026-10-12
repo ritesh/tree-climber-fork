@@ -7,16 +7,6 @@ from tree_climber.cli.visualizers.base_visualizer import (
     truncate_ast_label,
 )
 
-from .constants import (
-    AST_OVERLAY_BORDER_COLOR,
-    AST_OVERLAY_EDGE_COLOR,
-    AST_OVERLAY_FONT_SIZE,
-    AST_OVERLAY_LINKING_EDGE_COLOR,
-    AST_OVERLAY_NODE_COLOR,
-    AST_OVERLAY_SHOW_ONLY_NAMED,
-    DEFAULT_DPI,
-)
-
 
 def add_dfg_edge(G: pgv.AGraph, pred: int, succ: int, dfg_label: str):
     G.add_edge(

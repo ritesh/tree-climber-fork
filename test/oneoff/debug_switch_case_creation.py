@@ -10,7 +10,6 @@ Investigation: Examine the CFG before and after post-processing to see
 exactly where the default case connection is being lost.
 """
 
-from tree_climber.cfg.builder import CFGBuilder
 from tree_climber.cfg.languages.c import CCFGVisitor
 from tree_climber.ast_utils import parse_source_to_ast
 
@@ -45,13 +44,12 @@ def debug_switch_before_postprocessing():
 
     # Create CFG visitor but don't run post-processing yet
     visitor = CCFGVisitor()
-    visitor.setup_cfg()
 
     # Build CFG without post-processing
-    result = visitor.visit(tree.root_node)
+    visitor.visit(tree.root_node)
     cfg = visitor.cfg
 
-    print(f"\nBEFORE POST-PROCESSING:")
+    print("\nBEFORE POST-PROCESSING:")
     print(f"Total nodes: {len(cfg.nodes)}")
 
     # Find CASE nodes and switch heads
@@ -77,13 +75,13 @@ def debug_switch_before_postprocessing():
     for node_id, text in case_nodes:
         print(f"  {node_id}: '{text}'")
 
-    print(f"\nKey statements:")
+    print("\nKey statements:")
     for node_id, text, desc in statements:
         print(f"  {node_id}: '{text}' ({desc})")
 
     # Check connectivity from switch heads to case nodes
     if switch_heads:
-        print(f"\nSwitch connectivity BEFORE post-processing:")
+        print("\nSwitch connectivity BEFORE post-processing:")
         for switch_id, switch_text in switch_heads:
             switch_node = cfg.nodes[switch_id]
             print(f"  Switch {switch_id} ('{switch_text}'):")
@@ -98,11 +96,11 @@ def debug_switch_before_postprocessing():
                 )
 
     # Now run post-processing
-    print(f"\n" + "=" * 60)
+    print("\n" + "=" * 60)
     print("RUNNING POST-PROCESSING...")
     visitor._passthrough_entry_exit_nodes()
 
-    print(f"\nAFTER POST-PROCESSING:")
+    print("\nAFTER POST-PROCESSING:")
     print(f"Total nodes: {len(cfg.nodes)}")
 
     # Check what happened to connectivity
@@ -115,16 +113,16 @@ def debug_switch_before_postprocessing():
         elif "x = -1" in node.source_text:
             remaining_statements.append((node_id, node.source_text, "default_stmt"))
 
-    print(f"\nRemaining switch heads:")
+    print("\nRemaining switch heads:")
     for node_id, text in remaining_switch_heads:
         print(f"  {node_id}: '{text}'")
 
-    print(f"\nRemaining key statements:")
+    print("\nRemaining key statements:")
     for node_id, text, desc in remaining_statements:
         print(f"  {node_id}: '{text}' ({desc})")
 
     if remaining_switch_heads:
-        print(f"\nSwitch connectivity AFTER post-processing:")
+        print("\nSwitch connectivity AFTER post-processing:")
         for switch_id, switch_text in remaining_switch_heads:
             switch_node = cfg.nodes[switch_id]
             print(f"  Switch {switch_id} ('{switch_text}'):")

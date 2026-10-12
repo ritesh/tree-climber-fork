@@ -9,8 +9,8 @@
 ### Parsing Bugs
 - [ ] Java def use, next() should define the list it's operating on and hasNext(numbers) should _not_ define numbers, in enhanced for loops
 - [x] Both languages CFG, Function calls should have an edge from exit going back to the call
-- [x] Java def use, a++ should point to itself
-- [x] C def use, a++ should point to itself and should point to uses of a
+- [x] Java def use, a++ should point to itself (in loops; a straight-line a++ has no self-edge)
+- [x] C def use, a++ should point to itself (in loops) and should point to uses of a
 - [x] C and Java def use, in for loops, i++ should have a DFG edge back to i = 0
 - [x] C DFG, x += ... should be a use of previous definitions of x
 

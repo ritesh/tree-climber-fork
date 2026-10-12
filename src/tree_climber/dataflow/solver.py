@@ -25,7 +25,7 @@ class RoundRobinSolver:
                 predecessors = [
                     p
                     for p in node.predecessors
-                    if cfg.nodes.get(p).edge_labels.get(node_id)
+                    if cfg.nodes[p].edge_labels.get(node_id)
                     not in (
                         "function_call",
                         "function_return",

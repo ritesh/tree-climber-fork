@@ -8,8 +8,6 @@ including native Linux/macOS/Windows and WSL environments.
 import os
 import platform
 import subprocess
-import sys
-from typing import Optional
 
 
 class ClipboardError(Exception):

@@ -14,7 +14,7 @@ correct AST structure for parameter_declaration nodes.
 Investigation: Examine AST structure and fix parameter extraction logic.
 """
 
-from tree_climber.ast_utils import parse_source_to_ast, get_source_text
+from tree_climber.ast_utils import parse_source_to_ast
 from tree_climber.cfg.builder import CFGBuilder
 
 
@@ -37,7 +37,7 @@ def print_ast_structure(node, indent=0, max_depth=10):
                         field_name = node.field_name_for_child(i) or ""
                         if field_name:
                             field_name = f" [field: {field_name}]"
-                    except:
+                    except Exception:
                         pass
 
                 print(f"{prefix}  └─ {child.type}{field_name}")
@@ -75,7 +75,7 @@ def debug_parameter_extraction():
         print(f"Function name: {cfg.function_name}")
         print(f"Entry node text: '{entry_node.source_text}'")
         print(f"Variable definitions: {entry_node.metadata.variable_definitions}")
-        print(f"Expected: ['a', 'b', 'c']")
+        print("Expected: ['a', 'b', 'c']")
 
 
 if __name__ == "__main__":

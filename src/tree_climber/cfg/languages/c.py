@@ -100,16 +100,23 @@ class CCFGVisitor(CFGVisitor):
                         "call_expression",  # Function names in calls
                         "function_definition",  # Function names in definitions
                         "parameter_declaration",  # Parameter declarations
-                        "init_declarator",  # Variable declarations
                         "function_declarator",  # Function declarations
                     ]:
                         return None
+                    if node.parent.type == "init_declarator":
+                        # Only the declared name is skipped; the initializer is a use
+                        if node == node.parent.child_by_field_name("declarator"):
+                            return None
                     if node.parent.type == "assignment_expression":
-                        if node.parent.children[1].type in ("-=", "+=", "*=", "/="):
-                            # This is a compound assignment, treat it as a use
-                            return node.text.decode()
-                        else:
-                            # Otherwise, it's an assignment target, not a use
+                        is_target = node == node.parent.child_by_field_name("left")
+                        is_compound = node.parent.children[1].type in (
+                            "-=",
+                            "+=",
+                            "*=",
+                            "/=",
+                        )
+                        if is_target and not is_compound:
+                            # A plain assignment target is a definition, not a use
                             return None
                     if node.parent.type == "update_expression":
                         # Increment/decrement operations are both uses and definitions

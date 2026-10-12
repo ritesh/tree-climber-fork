@@ -14,7 +14,6 @@ connections, and source text to understand what's happening vs. what's expected.
 """
 
 from tree_climber.cfg.builder import CFGBuilder
-from tree_climber.cfg.cfg_types import NodeType
 
 
 def debug_switch():

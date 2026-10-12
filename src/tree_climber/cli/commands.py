@@ -6,7 +6,6 @@ visualizations of AST, CFG, DFG, and CPG.
 """
 
 import time
-from pathlib import Path
 
 import typer
 from tree_sitter import Tree
