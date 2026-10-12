@@ -10,6 +10,8 @@ import subprocess
 import sys
 
 import pytest
+import typer
+import typer.main
 from typer.testing import CliRunner
 
 from tree_climber import __version__
@@ -91,12 +93,17 @@ def test_list_languages_flag():
 
 def test_help_documents_the_hyphenated_spelling():
     result = runner.invoke(app, ["--help"])
+    declared = {
+        opt
+        for param in typer.main.get_command(app).params
+        for opt in (*param.opts, *param.secondary_opts)
+    }
 
     assert result.exit_code == 0
-    assert "--draw-cfg" in result.output
-    assert "--draw_cfg" not in result.output
-    assert "--version" in result.output
-    assert "--list-languages" in result.output
+    assert "--draw-cfg" in declared
+    assert "--draw_cfg" not in declared
+    assert "--version" in declared
+    assert "--list-languages" in declared
 
 
 def test_a_visualization_option_is_required(c_file):
