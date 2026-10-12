@@ -53,6 +53,19 @@ def collect_bindings(node: Node) -> Bindings:
     return collector.bindings
 
 
+def collect_for_header_bindings(node: Node) -> Bindings:
+    """Bindings of a `for` statement's header only: the target(s) it defines and
+    the iterable it uses, not the body."""
+    collector = _Collector()
+    left = node.child_by_field_name("left")
+    if left is not None:
+        collector.target(left, frozenset())
+    right = node.child_by_field_name("right")
+    if right is not None:
+        collector.visit(right, frozenset())
+    return collector.bindings
+
+
 def parameter_names(parameters: Node) -> List[str]:
     """Names bound by a `parameters` or `lambda_parameters` node."""
     names = (_parameter_name(parameter) for parameter in parameters.named_children)
