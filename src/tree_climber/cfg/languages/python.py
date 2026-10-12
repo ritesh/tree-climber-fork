@@ -2,7 +2,7 @@
 Control Flow Graph (CFG) generator for Python using py-tree-sitter.
 
 Covers straight-line code, function definitions, structured control flow
-(`if`/`elif`/`else`, `while`, `for`, loop `else`, `break`, `continue`), and
+(`if`/`elif`/`else`, `while`, `for`, loop `else`, `break`, `continue`, `match`), and
 exceptions (`try`/`except`/`else`/`finally`, `raise`, `with`). Statements without
 a dedicated handler become a single STATEMENT node, so unsupported constructs
 never invent control flow; later work replaces them construct by construct.
@@ -27,6 +27,8 @@ from tree_climber.cfg.cfg_types import CFGTraversalResult, NodeType
 from tree_climber.cfg.languages.python_bindings import (
     collect_bindings,
     collect_for_header_bindings,
+    collect_pattern_bindings,
+    is_irrefutable_pattern,
     parameter_names,
 )
 from tree_climber.cfg.visitor import CFGVisitor
@@ -471,6 +473,79 @@ class PythonCFGVisitor(CFGVisitor):
             header_id, node.child_by_field_name("alternative"), exit_id
         )
         return CFGTraversalResult(entry_node_id=header_id, exit_node_ids=[exit_id])
+
+    def visit_match_statement(self, node: Node) -> CFGTraversalResult:
+        """Visit a `match` statement as a chain of case tests.
+
+        The subject is evaluated once by a SWITCH_HEAD node. Each `case` is a
+        CONDITION node holding its pattern: `true` enters the body and `false`
+        tries the next case. Names a pattern captures are defined by a `capture`
+        node on the `true` edge, so a failed match leaves them untouched. A guard
+        is its own CONDITION node after the capture, and its `false` edge also
+        tries the next case. No case falls through, and when no case is
+        irrefutable the last `false` edge skips the match.
+        """
+        subject = get_required_child_by_field_name(node, "subject")
+        body = get_required_child_by_field_name(node, "body")
+
+        head_id = self.create_node(
+            NodeType.SWITCH_HEAD, subject, f"match {get_source_text(subject)}"
+        )
+        join_id = self.create_node(NodeType.EXIT, source_text="EXIT: match stmt")
+
+        pending: List[Tuple[int, Optional[str]]] = [(head_id, None)]
+        for clause in body.children_by_field_name("alternative"):
+            patterns = [c for c in clause.named_children if c.type == "case_pattern"]
+            block = get_required_child_by_field_name(clause, "consequence")
+            guard = clause.child_by_field_name("guard")
+
+            pattern_text = clause.text[
+                patterns[0].start_byte - clause.start_byte : patterns[-1].end_byte
+                - clause.start_byte
+            ].decode()
+            case_id = self.create_node(
+                NodeType.CONDITION, patterns[0], f"case {pattern_text}"
+            )
+            self._cannot_raise.add(case_id)
+            bindings = collect_pattern_bindings(patterns)
+            metadata = self.cfg.nodes[case_id].metadata
+            metadata.variable_definitions = []
+            metadata.variable_uses = bindings.uses
+            metadata.function_calls = []
+            for source_id, label in pending:
+                self.cfg.add_edge(source_id, case_id, label)
+            pending = []
+
+            tail_id, tail_label = case_id, "true"
+            if bindings.definitions:
+                capture_id = self.create_node(
+                    NodeType.STATEMENT,
+                    patterns[0],
+                    f"capture {', '.join(bindings.definitions)}",
+                )
+                self._cannot_raise.add(capture_id)
+                metadata = self.cfg.nodes[capture_id].metadata
+                metadata.variable_definitions = bindings.definitions
+                metadata.variable_uses = []
+                metadata.function_calls = []
+                self.cfg.add_edge(case_id, capture_id, "true")
+                tail_id, tail_label = capture_id, None
+
+            if guard is not None:
+                condition = guard.named_children[0]
+                guard_id = self.create_node(
+                    NodeType.CONDITION, condition, f"if {get_source_text(condition)}"
+                )
+                self.cfg.add_edge(tail_id, guard_id, tail_label)
+                pending = [(case_id, "false"), (guard_id, "false")]
+                tail_id, tail_label = guard_id, "true"
+            elif not (len(patterns) == 1 and is_irrefutable_pattern(patterns[0])):
+                pending = [(case_id, "false")]
+            self._visit_body(block, tail_id, join_id, tail_label)
+
+        for source_id, label in pending:
+            self.cfg.add_edge(source_id, join_id, label)
+        return CFGTraversalResult(entry_node_id=head_id, exit_node_ids=[join_id])
 
     def visit_break_statement(self, node: Node) -> CFGTraversalResult:
         """Visit a break statement; outside a loop it has no outgoing edge"""

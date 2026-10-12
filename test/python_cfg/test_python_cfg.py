@@ -240,16 +240,7 @@ class TestUnsupportedStatements:
 
     def test_flow_stays_connected_through_unsupported_statements(self):
         cfg = build_cfg(
-            "x = 1\n"
-            "class A:\n"
-            "    z = 3\n"
-            "match x:\n"
-            "    case 1:\n"
-            "        pass\n"
-            "@decorator\n"
-            "def g():\n"
-            "    pass\n"
-            "w = 4\n"
+            "x = 1\nclass A:\n    z = 3\n@decorator\ndef g():\n    pass\nw = 4\n"
         )
 
         module_entry = cfg.entry_node_ids[0]
@@ -257,7 +248,7 @@ class TestUnsupportedStatements:
         reachable = reachable_from(cfg, module_entry)
         assert reachable == set(cfg.nodes)
         assert module_exit in reachable
-        assert len(cfg.nodes) == 7
+        assert len(cfg.nodes) == 6
 
 
 class TestFixtureFile:

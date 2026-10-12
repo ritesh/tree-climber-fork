@@ -14,7 +14,8 @@ A hands-on tour of what Tree Climber does with Python. Every command and every o
 | Calls between functions in the same file | Linked, including calls to a function defined later |
 | Def-use chains and reaching definitions | Modeled |
 | `async def` | Modeled like `def` |
-| Classes (and their methods), decorated functions, nested `def`, `match` | **One opaque statement** each: the CFG node is the whole construct and its body is not analyzed (#9, #10) |
+| `match` / `case` | Modeled: one test per case, captures, guards, no fall-through |
+| Classes (and their methods), decorated functions, nested `def` | **One opaque statement** each: the CFG node is the whole construct and its body is not analyzed (#10) |
 | Lambdas, comprehensions | Stay inside their statement; their own variables are not reported (#10, #11) |
 
 Python is available from the CLI and the HTTP API. The web UI's language selector does not list it yet (#12).
@@ -335,6 +336,53 @@ Def-use chains
 
 Check: `items[0] = 1` both uses and defines `items` (a weak update), so the original definition still flows through it. The dataflow framework supports only strong updates, so this convention keeps earlier definitions alive. Attribute writes (`obj.f = v`) behave the same.
 
+### match
+
+```python
+def handle(cmd):
+    match cmd:
+        case [name, *args] if name:
+            result = name
+        case {"quit": code}:
+            result = code
+        case _:
+            result = None
+    return result
+```
+
+```
+CFG edges
+  ENTRY:handle -> match cmd
+  match cmd -> case [name, *args]
+  case [name, *args] -> case {"quit": code}  [false]
+  case [name, *args] -> capture name, args  [true]
+  capture name, args -> if name
+  if name -> case {"quit": code}  [false]
+  if name -> result = name  [true]
+  result = name -> return result
+  case {"quit": code} -> capture code  [true]
+  case {"quit": code} -> case _  [false]
+  capture code -> result = code
+  result = code -> return result
+  case _ -> result = None  [true]
+  result = None -> return result
+  return result -> EXIT:handle
+Def-use chains
+  cmd: ENTRY:handle => match cmd
+  name: capture name, args => if name, result = name
+  code: capture code => result = code
+  result: result = code => return result
+  result: result = None => return result
+  result: result = name => return result
+```
+
+Check:
+- the subject is evaluated once, by the `match cmd` node, and the cases are tried in order through `false` edges;
+- a pattern that binds names gets a `capture` node on its `true` edge, so a failed match does not redefine them;
+- a guard is its own `if` node, and its `false` edge also tries the next case (the names stay bound);
+- `case _` is irrefutable, so it has no `false` edge. Without it, the last case's `false` edge would skip to the code after the `match`;
+- nothing falls through from one body to the next, and `break`/`continue` in a case target the enclosing loop.
+
 ### Constructs that are opaque today
 
 ```python
@@ -343,9 +391,6 @@ def outer(xs):
         pass
     sq = [v * v for v in xs]
     key = lambda v: v + 1
-    match xs:
-        case [first, *rest]:
-            print(first)
     return sq
 ```
 
@@ -354,15 +399,14 @@ CFG edges
   ENTRY:outer -> class A:
   class A: -> sq = [v * v for v in xs]
   sq = [v * v for v in xs] -> key = lambda v: v + 1
-  key = lambda v: v + 1 -> match xs:
-  match xs: -> return sq
+  key = lambda v: v + 1 -> return sq
   return sq -> EXIT:outer
 Def-use chains
-  xs: ENTRY:outer => sq = [v * v for v in xs], match xs:
+  xs: ENTRY:outer => sq = [v * v for v in xs]
   sq: sq = [v * v for v in xs] => return sq
 ```
 
-Check: `class` and `match` each collapse to a single node, so `print(first)` is not a separate step and `first`/`rest` do not appear as definitions. The comprehension and lambda stay inside their statements and their own variable (`v`) is not reported. A decorated function and a function nested in another function likewise become one statement of the enclosing flow, with no graph of their own and no call links into them. These gaps are tracked as #9, #10, and #11; anything that differs from this section is a bug.
+Check: `class A:` collapses to a single node, so its body is not a separate step. The comprehension and lambda stay inside their statements and their own variable (`v`) is not reported. A decorated function and a function nested in another function likewise become one statement of the enclosing flow, with no graph of their own and no call links into them. These gaps are tracked as #10 and #11; anything that differs from this section is a bug.
 
 ## 4. HTTP API
 
