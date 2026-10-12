@@ -37,6 +37,12 @@ LANGUAGES: Dict[str, LanguageSpec] = {
             extensions=(".java",),
             visitor="tree_climber.cfg.languages.java:JavaCFGVisitor",
         ),
+        LanguageSpec(
+            name="python",
+            display_name="Python",
+            extensions=(".py", ".pyi"),
+            visitor="tree_climber.cfg.languages.python:PythonCFGVisitor",
+        ),
     )
 }
 

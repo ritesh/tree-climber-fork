@@ -9,7 +9,7 @@ import asyncio
 import pytest
 from pydantic import ValidationError
 
-from tree_climber.language_registry import DEFAULT_LANGUAGE
+from tree_climber.language_registry import DEFAULT_LANGUAGE, SUPPORTED_LANGUAGES
 from tree_climber.viz.app import (
     ParseRequest,
     health_check,
@@ -38,7 +38,8 @@ def test_root_endpoint():
     result = asyncio.run(root())
 
     assert "version" in result
-    assert result["supported_languages"] == ["c", "java"]
+    assert result["supported_languages"] == SUPPORTED_LANGUAGES
+    assert "python" in result["supported_languages"]
 
 
 def test_health_endpoint():
@@ -61,6 +62,19 @@ def test_parse_endpoint(language, source):
     assert response.ast is not None
     assert response.dfg is not None
     assert response.dfg["edges"], "x = 42 should reach its use in the return"
+
+
+def test_parse_endpoint_python():
+    source = "def foo():\n    return 42\n"
+    request = ParseRequest.model_validate({"source_code": source, "language": "python"})
+
+    response = asyncio.run(parse_source_code(request))
+
+    assert response.success, response.error
+    assert response.cfg is not None
+    assert len(response.cfg["nodes"]) > 0
+    assert response.cfg["entry_node_ids"]
+    assert response.ast is not None
 
 
 def test_unsupported_language_is_rejected():
