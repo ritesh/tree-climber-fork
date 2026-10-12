@@ -187,6 +187,9 @@ def typer_main(
     # Specify language and output directory explicitly:\n
     tree-climber test/test.java --language java --draw-ast --draw-cfg --draw-dfg --draw-cpg --output ./out
 
+    # Python files are detected by their .py extension:\n
+    tree-climber test/python_cfg/basic_constructs.py --draw-cfg --draw-dfg
+
     # Read code from clipboard (language must be specified):\n
     tree-climber clipboard --language java --draw-ast
     tree-climber clipboard -l c --draw-cfg --draw-dfg
@@ -194,6 +197,7 @@ def typer_main(
     # Read code from stdin pipe (language must be specified):\n
     echo 'int main() { return 0; }' | tree-climber - --language c --draw-ast
     cat mycode.java | tree-climber - -l java --draw-cfg
+    cat module.py | tree-climber - -l python --draw-cfg --draw-dfg
     """
     # Handle draw_duc as alias for draw_dfg
     draw_dfg = draw_dfg or draw_duc

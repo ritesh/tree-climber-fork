@@ -45,3 +45,21 @@ dev = [
     "pyright>=1.1.402",
     "ruff>=0.12.1",
 ]
+
+# Fixture files whose odd formatting, unused names, and undefined names are the point
+[tool.ruff]
+extend-exclude = [
+    "test/python_cfg/edge_cases.py",
+    "test/python_cfg/nested_structures.py",
+    "test/python_cfg/data_flow_patterns.py",
+]
+
+[tool.pyright]
+exclude = [
+    "**/node_modules",
+    "**/__pycache__",
+    "**/.*",
+    "test/python_cfg/edge_cases.py",
+    "test/python_cfg/nested_structures.py",
+    "test/python_cfg/data_flow_patterns.py",
+]

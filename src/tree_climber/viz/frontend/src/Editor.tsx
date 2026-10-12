@@ -4,18 +4,7 @@ import Editor from "@monaco-editor/react";
 import { useGraph, selectGraphNodeById, setOnGraphNodeSelectCallback } from './GraphContext';
 import type Graph from "graphology";
 import './Editor.css'
-
-const DEFAULT_CODE = `// Example code
-int main() {
-    int a;
-    if (a > 10) {
-        for (int i = 0; i < 10; i ++) {
-            a ++;
-        }
-    }
-    return a;
-}
-`
+import { loadCode, saveCode } from './sampleCode';
 
 // Type definitions
 interface Position {
@@ -98,22 +87,19 @@ const MonacoEditor = ({ language, onTextChange }: { language: string, onTextChan
     getNodesInRangeRef.current = getNodesInRange;
   }, [graphologyGraph, getNodesInRange]);
   
-  // Load initial code from localStorage
+  // Load the selected language's code from localStorage (or its sample)
   React.useEffect(() => {
-    let storedCode = localStorage.getItem('tree_climber_code');
-    if (!storedCode) {
-      storedCode = DEFAULT_CODE;
-    }
+    const storedCode = loadCode(language);
     setCode(storedCode);
     // Notify parent component of the initial code load
     onTextChange(storedCode);
-  }, [onTextChange]);
+  }, [onTextChange, language]);
   // On change, update localStorage
   const handleEditorChange = (code: string | undefined) => {
     if (code !== undefined) {
       console.log("Updated code:", code.length, "characters");
       setCode(code);
-      localStorage.setItem('tree_climber_code', code);
+      saveCode(language, code);
       onTextChange(code); // Notify parent component of code change
     }
   };
