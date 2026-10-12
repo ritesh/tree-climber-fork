@@ -3,6 +3,7 @@ import Editor from './Editor'
 import Graph from './Graph'
 import {LanguageSelector, loadLanguage} from './LanguageSelector'
 import { GraphProvider } from './GraphContext'
+import { loadCode } from './sampleCode'
 
 // Define the interface for Graph component ref
 interface GraphRef {
@@ -31,11 +32,8 @@ function App() {
   // Handle language changes - update graph with current code
   useEffect(() => {
     if (isInitialized && graphRef.current) {
-      // Get current code from localStorage and update graph with new language
-      const storedCode = localStorage.getItem('tree_climber_code');
-      if (storedCode) {
-        handleCodeChange(storedCode);
-      }
+      // Get the new language's code and update the graph
+      handleCodeChange(loadCode(language));
     }
   }, [language, isInitialized]);
 

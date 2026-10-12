@@ -68,3 +68,69 @@ def def_use_chains(code: str, variable: str) -> Dict[str, List[str]]:
         )
         for chain in result.chains.get(variable, [])
     }
+
+
+CALL_LABELS = ("function_call", "function_return")
+
+
+def function_nodes(cfg: CFG, name: str) -> Set[int]:
+    """Nodes of one function: reachable from its entry without following call edges."""
+    entry = next(
+        entry_id
+        for entry_id in cfg.entry_node_ids
+        if cfg.nodes[entry_id].source_text == name
+    )
+    seen: Set[int] = set()
+    stack = [entry]
+    while stack:
+        node_id = stack.pop()
+        if node_id in seen:
+            continue
+        seen.add(node_id)
+        node = cfg.nodes[node_id]
+        stack.extend(
+            successor
+            for successor in node.successors
+            if node.edge_labels.get(successor) not in CALL_LABELS
+        )
+    return seen
+
+
+def first_line(text: str) -> str:
+    return text.splitlines()[0] if text else text
+
+
+def function_edges(cfg: CFG, name: str) -> Set[Edge]:
+    """Edges inside one function, by the first line of each node's text."""
+    members = function_nodes(cfg, name)
+    return {
+        (
+            first_line(label(node)),
+            first_line(label(cfg.nodes[successor])),
+            node.edge_labels.get(successor),
+        )
+        for node_id in members
+        for node in [cfg.nodes[node_id]]
+        for successor in node.successors
+        if successor in members and node.edge_labels.get(successor) not in CALL_LABELS
+    }
+
+
+def function_chains(cfg: CFG, name: str) -> Dict[str, Dict[str, List[str]]]:
+    """Def-use chains inside one function: {variable: {definition: [uses]}}."""
+    members = function_nodes(cfg, name)
+    reaching = RoundRobinSolver().solve(cfg, ReachingDefinitionsProblem())
+    result = DefUseSolver().solve(cfg, reaching)
+    chains: Dict[str, Dict[str, List[str]]] = {}
+    for variable, variable_chains in result.chains.items():
+        for chain in variable_chains:
+            if chain.definition not in members:
+                continue
+            chains.setdefault(variable, {})[
+                first_line(label(cfg.nodes[chain.definition]))
+            ] = sorted(
+                first_line(label(cfg.nodes[use]))
+                for use in chain.uses
+                if use in members
+            )
+    return chains

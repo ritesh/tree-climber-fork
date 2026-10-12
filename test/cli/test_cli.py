@@ -8,6 +8,7 @@ to cover the real entry point.
 
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 import typer
@@ -74,6 +75,30 @@ def test_each_language_is_detected_from_its_file_extension(tmp_path, language):
 
     assert result.exit_code == 0, result.output
     assert (tmp_path / f"{filename}_cfg.png").exists()
+
+
+def test_the_python_example_from_the_help_text_works(tmp_path):
+    example = Path(__file__).parents[1] / "python_cfg" / "basic_constructs.py"
+
+    result = runner.invoke(
+        app,
+        [str(example), "--draw-cfg", "--draw-dfg", "--output", str(tmp_path)],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert (tmp_path / "basic_constructs.py_cfg.png").exists()
+    assert (tmp_path / "basic_constructs.py_dfg.png").exists()
+
+
+def test_python_can_be_read_from_stdin(tmp_path):
+    result = runner.invoke(
+        app,
+        ["-", "-l", "python", "--draw-cfg", "--output", str(tmp_path)],
+        input="def f(x):\n    return x\n",
+    )
+
+    assert result.exit_code == 0, result.output
+    assert list(tmp_path.glob("*_cfg.png"))
 
 
 def test_version_flag():

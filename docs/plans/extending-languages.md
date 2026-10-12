@@ -106,7 +106,7 @@ Add one `LanguageSpec` to `LANGUAGES` in `src/tree_climber/language_registry.py`
 LanguageSpec(
     name="python",  # registry key and tree-sitter grammar name
     display_name="Python",
-    extensions=(".py",),
+    extensions=(".py", ".pyi"),
     visitor="tree_climber.cfg.languages.python:PythonCFGVisitor",
 )
 ```
@@ -115,9 +115,9 @@ The CFG builder, CLI (supported-language list, `--language` validation, file ext
 
 ### 4. Set Up Test Files
 
-1. Create a test file at `src/tree_climber/cfg/test_<language>.py`
-2. Create sample code files in `test/test.<language_extension>`
-3. Implement test cases modeling after `test_c.py` and `test_java.py`
+1. Create `test/<language>_cfg/` with fixture files and `test_<language>_cfg.py`, modeled after `test/c_cfg/` and `test/python_cfg/`
+2. Describe what each fixture covers in its own header comment (keep the directory README minimal)
+3. Add def/use tests next to them (see `test/python_cfg/test_python_bindings.py`), and a sample file to the CLI tests in `test/cli/test_cli.py`
 
 ### 5. Implementation Process
 
@@ -244,6 +244,26 @@ This section documents known limitations in existing language implementations th
 - Method chaining in fluent interfaces
 - Anonymous class instantiation
 - Array initializer expressions
+
+### Python Language Implementation Limitations (`python.py`, `python_bindings.py`)
+
+See `docs/python-guide.md` for worked examples of each point.
+
+**Modeled:** module and function graphs (every function and method is its own subgraph, at any depth), `if`/`elif`/`else`, `while`, `for` and loop `else`, `break`/`continue`, `match`, `try`/`except`/`except*`/`else`/`finally`, `raise`, `with`, async forms, classes, decorators, and def/use for every binding construct.
+
+**Approximations:**
+- Calls are resolved by name only, across the whole file: `obj.f()` links to every function named `f`, and `self.step()` to every method named `step` in any class. `Class(...)` links to `Class.__init__`. Calling a generator or coroutine function links to its entry even though the body runs later.
+- Dataflow does not cross function calls, so closure reads and `global`/`nonlocal` writes are not connected to the other scope's definitions (#42).
+- Writes through attributes and subscripts (`a.b = v`, `a[i] = v`) are weak updates: the root name is defined and used.
+- Exceptions: `with` suppression by `__exit__` is not modeled; a `finally` block is shared by all paths and does not remember which one entered it; one edge carries one label, so a `finally` exit that both returns and re-raises to the same target shows only the first; handler headers, `case` tests and `__exit__` nodes are treated as non-raising; exceptions that escape a callee leave through its EXIT, so return edges also appear on exception paths.
+- `match`: a pattern that fails after binding some names is treated as binding none; the bundled grammar parses `(name)` as a one-element tuple pattern.
+
+**Statements that stay whole:**
+- A class body is one statement (its calls count; the names it binds are not tracked and its own control flow is not modeled).
+- Lambdas, comprehensions, `yield` and `await` stay inside their statement.
+- A plain module-level `def` has no statement in the module flow, so a file of only `def`s has no `<module>` graph.
+
+**Grammar:** the bundled tree-sitter grammar predates some recent syntax (`type` statements, PEP 695 generics on classes, PEP 701 f-strings). Such code parses but may be one opaque statement without its bindings.
 
 ### General Architecture Limitations
 

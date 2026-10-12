@@ -150,7 +150,7 @@ The FastAPI backend provides the following endpoints:
 1. Create a new visitor class in `src/tree_climber/cfg/languages/`
 2. Implement language-specific CFG construction logic
 3. Register the language in `src/tree_climber/language_registry.py` (name, display name, file extensions, visitor path). The CLI, web API, and CFG builder all read from it.
-4. Add the language to the list in `src/tree_climber/viz/frontend/src/LanguageSelector.tsx` so it appears in the web UI
+4. Add the language to the list in `src/tree_climber/viz/frontend/src/LanguageSelector.tsx` so it appears in the web UI, and a sample program for it to `src/sampleCode.ts` (each language keeps its own editor buffer, starting from its sample)
 5. Add test cases in the `test/` directory
 
 ### Adding New Analyses
