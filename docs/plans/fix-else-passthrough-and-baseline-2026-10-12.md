@@ -29,4 +29,21 @@ Plan, in order of risk:
 
 ## Results
 
-To be filled in when the work is done.
+Executive summary: CI-equivalent checks are green (`ruff format --check`, `ruff check`, `pyright`, `pytest`, frontend `tsc -b` and `vite build`). `pytest`: 99 passed, 28 strict xfails.
+
+### #3
+Passthrough nodes are now selected by `NodeType` only. Regression tests added for C and Java. No existing CFG expectations changed.
+
+### #2
+- Lint/types: 55 ruff findings and 22 pyright errors resolved. One stale debug script (`test/oneoff/debug_java_simple_if.py`) deleted because both its import path and its sample directory no longer exist.
+- Two real analysis bugs found while repairing the DFG tests and fixed with a regression test (C and Java): an identifier used as an initializer (`int y = x;`) or as the value of an assignment (`y = x;`) was not recorded as a use, because the rules skipped identifiers by parent node type instead of by field. This silently dropped def-use chains.
+- `test/dfg/` repaired: stale imports, a `test.dfg` import that could not resolve, tests calling a fixture function as an object, and a use-def lookup comparing text against a node id.
+- 28 DFG tests are marked `xfail(strict=True)`, verified with `--runxfail` to fail only for the stated reason:
+  - 20 assert interprocedural parameter aliasing, deliberately deferred to vNext in commit 77acb86 and TODO.md.
+  - 8 (`TestIncrementOperators`) assert that `a++` is a def-use self-reference outside loops. The fixpoint solver (cff4844) correctly does not produce that. Whether this convention should be reinstated is an open design decision.
+- `viz/test_api.py` moved to `test/viz/` and rewritten to call the endpoint coroutines directly, so it needs no live server and no new dependency (`TestClient` would require `httpx`).
+- Frontend: `Graph.tsx` collection call simplified; type stub for `cytoscape-node-html-label` split into a module augmentation file and an ambient module declaration.
+
+### Noticed, not changed
+- CLI `--help` examples use hyphenated flags (`--draw-cfg`) but the real options are `--draw_cfg`, `--draw_dfg`, `--draw_cpg`.
+- `.claude/settings.json` runs a bare `ruff format` after every Edit/Write, which reformats unrelated files (including code blocks in markdown) with a different ruff version than the project's.
