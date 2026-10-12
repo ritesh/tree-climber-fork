@@ -104,12 +104,18 @@ class JavaCFGVisitor(CFGVisitor):
                 if node.parent:
                     if node.parent.type in [
                         "method_declaration",  # Function defs
-                        "method_invocation",  # Function calls
-                        "field_access",  # Method names in calls
                         "parameter",  # Parameter declarations
                         "class_declaration",  # Class names
                     ]:
                         return None
+                    if node.parent.type == "method_invocation":
+                        # Only the method name is skipped; the receiver is a use
+                        if node == node.parent.child_by_field_name("name"):
+                            return None
+                    if node.parent.type == "field_access":
+                        # Only the field name is skipped; the object is a use
+                        if node == node.parent.child_by_field_name("field"):
+                            return None
                     if node.parent.type == "variable_declarator":
                         # Only the declared name is skipped; the initializer is a use
                         if node == node.parent.child_by_field_name("name"):
