@@ -1,14 +1,21 @@
 """
 Control Flow Graph (CFG) generator for Python using py-tree-sitter.
 
-Covers straight-line code, function definitions, and structured control flow
-(`if`/`elif`/`else`, `while`, `for`, loop `else`, `break`, `continue`). Statements
-without a dedicated handler become a single STATEMENT node, so unsupported
-constructs never invent control flow; later work replaces them construct by
-construct.
+Covers straight-line code, function definitions, structured control flow
+(`if`/`elif`/`else`, `while`, `for`, loop `else`, `break`, `continue`), and
+exceptions (`try`/`except`/`else`/`finally`, `raise`, `with`). Statements without
+a dedicated handler become a single STATEMENT node, so unsupported constructs
+never invent control flow; later work replaces them construct by construct.
+
+Exception edges, labeled `exception`, leave from the state *before* a statement
+(the predecessors of each statement that may raise), because the raising
+statement never completes. A `finally` block, or the `__exit__` node of a `with`,
+is shared: normal flow, exceptions, `return`, `break`, and `continue` all pass
+through it and continue to their own targets.
 """
 
-from typing import Iterable, Iterator, List, Optional
+from dataclasses import dataclass, field
+from typing import Iterable, Iterator, List, Optional, Set, Tuple
 
 from tree_sitter import Node
 
@@ -26,10 +33,46 @@ from tree_climber.cfg.languages.python_bindings import (
 from tree_climber.cfg.visitor import CFGVisitor
 
 
+NON_RAISING_STATEMENTS = frozenset(
+    {"pass_statement", "global_statement", "nonlocal_statement"}
+)
+
+
+@dataclass
+class _Region:
+    """Nodes and explicit raise sources that share one exception target."""
+
+    nodes: List[int] = field(default_factory=list)
+    raisers: List[Tuple[int, str]] = field(default_factory=list)
+
+
+@dataclass
+class _Finally:
+    """A `finally` block, or a `with` exit, that jumps and exceptions pass through."""
+
+    entry_id: int
+    function_depth: int
+    loop_depth: int
+    pending: List[Tuple[int, str]] = field(default_factory=list)
+    reached_by_exception: bool = False
+
+
 class PythonCFGVisitor(CFGVisitor):
     """Python-specific CFG visitor implementation"""
 
     MODULE_NAME = "<module>"
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._regions: List[_Region] = []
+        self._finallys: List[_Finally] = []
+        self._cannot_raise: Set[int] = set()
+
+    def create_node(self, *args, **kwargs) -> int:
+        node_id = super().create_node(*args, **kwargs)
+        if self._regions:
+            self._regions[-1].nodes.append(node_id)
+        return node_id
 
     # AST utilities
     def get_calls(self, ast_node: Node) -> List[str]:
@@ -97,6 +140,86 @@ class PythonCFGVisitor(CFGVisitor):
         return CFGTraversalResult(
             entry_node_id=first_entry, exit_node_ids=current_exits
         )
+
+    def _may_raise(self, node_id: int) -> bool:
+        node = self.cfg.nodes[node_id]
+        if node_id in self._cannot_raise or node.ast_node is None:
+            return False
+        if node.node_type in (
+            NodeType.ENTRY,
+            NodeType.EXIT,
+            NodeType.BREAK,
+            NodeType.CONTINUE,
+        ):
+            return False
+        return node.ast_node.type not in NON_RAISING_STATEMENTS
+
+    def _link(self, source_id: int, target_id: int, label: Optional[str]) -> None:
+        """Add an edge unless the two nodes are already connected or identical."""
+        if source_id != target_id and (
+            target_id not in self.cfg.nodes[source_id].successors
+        ):
+            self.cfg.add_edge(source_id, target_id, label)
+
+    def _raise_from(self, source_id: int, label: str = "exception") -> None:
+        """Send an exception from a node to the enclosing target.
+
+        The target is the innermost region's, resolved when it closes, or the
+        function exit when there is no enclosing region.
+        """
+        if self._regions:
+            self._regions[-1].raisers.append((source_id, label))
+        elif self.context.exit_node_ids:
+            self._link(source_id, self.context.exit_node_ids[-1], label)
+
+    def _close_region(self, region: _Region, target_id: int) -> bool:
+        """Connect a region to its exception target; True if anything connects."""
+        reached = bool(region.raisers)
+        for source_id, label in region.raisers:
+            self._link(source_id, target_id, label)
+        for node_id in region.nodes:
+            if not self._may_raise(node_id):
+                continue
+            for predecessor_id in list(self.cfg.nodes[node_id].predecessors):
+                self._link(predecessor_id, target_id, "exception")
+                reached = True
+        return reached
+
+    def _jump(self, source_id: int, kind: str, target_id: int) -> None:
+        """Route a return/break/continue through the finally blocks it crosses."""
+        function_depth = len(self.context.exit_node_ids)
+        loop_depth = len(self.context.break_targets)
+        crossed = [
+            frame
+            for frame in reversed(self._finallys)
+            if frame.function_depth == function_depth
+            and (kind == "return" or frame.loop_depth == loop_depth)
+        ]
+        if not crossed:
+            self.cfg.add_edge(source_id, target_id)
+            return
+
+        self.cfg.add_edge(source_id, crossed[0].entry_id)
+        for index, frame in enumerate(crossed):
+            is_last = index + 1 == len(crossed)
+            hop = target_id if is_last else crossed[index + 1].entry_id
+            if (hop, kind) not in frame.pending:
+                frame.pending.append((hop, kind))
+
+    def _connect_finally_exits(
+        self,
+        frame: _Finally,
+        exit_ids: List[int],
+        join_id: int,
+        falls_through: bool,
+    ) -> None:
+        for exit_id in exit_ids:
+            if falls_through:
+                self._link(exit_id, join_id, None)
+            for hop, kind in frame.pending:
+                self._link(exit_id, hop, kind)
+            if frame.reached_by_exception:
+                self._raise_from(exit_id, "exception")
 
     def _create_condition(self, condition: Node, node_type: NodeType) -> int:
         return self.create_node(node_type, condition, get_source_text(condition))
@@ -243,7 +366,7 @@ class PythonCFGVisitor(CFGVisitor):
         return_id = self.create_node(NodeType.RETURN, node, get_source_text(node))
 
         assert self.context.exit_node_ids, "Return statement must have an exit node"
-        self.cfg.add_edge(return_id, self.context.exit_node_ids[-1])
+        self._jump(return_id, "return", self.context.exit_node_ids[-1])
 
         return CFGTraversalResult(entry_node_id=return_id, exit_node_ids=[])
 
@@ -336,7 +459,7 @@ class PythonCFGVisitor(CFGVisitor):
         break_id = self.create_node(NodeType.BREAK, node, get_source_text(node))
         target = self.context.get_break_target()
         if target is not None:
-            self.cfg.add_edge(break_id, target)
+            self._jump(break_id, "break", target)
         return CFGTraversalResult(entry_node_id=break_id, exit_node_ids=[])
 
     def visit_continue_statement(self, node: Node) -> CFGTraversalResult:
@@ -344,5 +467,176 @@ class PythonCFGVisitor(CFGVisitor):
         continue_id = self.create_node(NodeType.CONTINUE, node, get_source_text(node))
         target = self.context.get_continue_target()
         if target is not None:
-            self.cfg.add_edge(continue_id, target)
+            self._jump(continue_id, "continue", target)
         return CFGTraversalResult(entry_node_id=continue_id, exit_node_ids=[])
+
+    def visit_raise_statement(self, node: Node) -> CFGTraversalResult:
+        """Visit a raise statement; it has no normal successor"""
+        raise_id = self.create_node(NodeType.STATEMENT, node, get_source_text(node))
+        self._cannot_raise.add(raise_id)
+        self._raise_from(raise_id, "exception")
+        return CFGTraversalResult(entry_node_id=raise_id, exit_node_ids=[])
+
+    @staticmethod
+    def _handler_parts(clause: Node) -> Tuple[Optional[Node], Node]:
+        named = [c for c in clause.named_children if c.type != "comment"]
+        block = next(c for c in reversed(named) if c.type == "block")
+        test = next((c for c in named if c.id != block.id), None)
+        return test, block
+
+    def _visit_handlers(
+        self, handlers: List[Node], frame: Optional[_Finally]
+    ) -> Tuple[Optional[int], List[int]]:
+        """Visit except clauses as a chain of tests: `true` enters the handler,
+        `false` moves to the next test, and the last `false` propagates outward.
+        A bare `except:` has no test and catches everything."""
+        dispatch_entry: Optional[int] = None
+        previous_header: Optional[int] = None
+        exit_ids: List[int] = []
+
+        for handler in handlers:
+            test, block = self._handler_parts(handler)
+            header_id: Optional[int] = None
+            if test is not None:
+                keyword = (
+                    "except*" if handler.type == "except_group_clause" else "except"
+                )
+                header_id = self.create_node(
+                    NodeType.CONDITION, test, f"{keyword} {get_source_text(test)}"
+                )
+                self._cannot_raise.add(header_id)
+
+            body = self.visit(block)
+            if header_id is not None:
+                self.cfg.add_edge(header_id, body.entry_node_id, "true")
+                entry_id = header_id
+            else:
+                entry_id = body.entry_node_id
+
+            if previous_header is not None:
+                self.cfg.add_edge(previous_header, entry_id, "false")
+            elif dispatch_entry is None:
+                dispatch_entry = entry_id
+            exit_ids.extend(body.exit_node_ids)
+            previous_header = header_id
+
+        if previous_header is not None:
+            if frame is not None:
+                self._link(previous_header, frame.entry_id, "false")
+                frame.reached_by_exception = True
+            else:
+                self._raise_from(previous_header, "false")
+        return dispatch_entry, exit_ids
+
+    def visit_try_statement(self, node: Node) -> CFGTraversalResult:
+        """Visit try/except/else/finally"""
+        body_node = get_required_child_by_field_name(node, "body")
+        handlers = [
+            child
+            for child in node.children
+            if child.type in ("except_clause", "except_group_clause")
+        ]
+        else_clause = next((c for c in node.children if c.type == "else_clause"), None)
+        finally_clause = next(
+            (c for c in node.children if c.type == "finally_clause"), None
+        )
+
+        entry_id = self.create_node(NodeType.ENTRY, source_text="ENTRY: try")
+        join_id = self.create_node(NodeType.EXIT, source_text="EXIT: try stmt")
+        frame: Optional[_Finally] = None
+        if finally_clause is not None:
+            frame = _Finally(
+                entry_id=self.create_node(NodeType.ENTRY, source_text="ENTRY: finally"),
+                function_depth=len(self.context.exit_node_ids),
+                loop_depth=len(self.context.break_targets),
+            )
+            self._finallys.append(frame)
+
+        body_region = _Region()
+        self._regions.append(body_region)
+        body = self.visit(body_node)
+        self._regions.pop()
+        self.cfg.add_edge(entry_id, body.entry_node_id)
+
+        handler_region: Optional[_Region] = None
+        if frame is not None:
+            handler_region = _Region()
+            self._regions.append(handler_region)
+
+        dispatch_entry, handler_exits = self._visit_handlers(handlers, frame)
+        normal_exits = body.exit_node_ids
+        if else_clause is not None:
+            else_body = self.visit(
+                get_required_child_by_field_name(else_clause, "body")
+            )
+            for exit_id in body.exit_node_ids:
+                self.cfg.add_edge(exit_id, else_body.entry_node_id)
+            normal_exits = else_body.exit_node_ids
+
+        if frame is not None:
+            self._regions.pop()
+            self._finallys.pop()
+
+        body_target = dispatch_entry
+        if body_target is None and frame is not None:
+            body_target = frame.entry_id
+        if body_target is not None:
+            reached = self._close_region(body_region, body_target)
+            if frame is not None and body_target == frame.entry_id:
+                frame.reached_by_exception = frame.reached_by_exception or reached
+        if frame is not None and handler_region is not None:
+            reached = self._close_region(handler_region, frame.entry_id)
+            frame.reached_by_exception = frame.reached_by_exception or reached
+
+        after_id = frame.entry_id if frame is not None else join_id
+        for exit_id in [*normal_exits, *handler_exits]:
+            self.cfg.add_edge(exit_id, after_id)
+
+        if frame is not None and finally_clause is not None:
+            finally_block = next(
+                c for c in finally_clause.named_children if c.type == "block"
+            )
+            finally_body = self.visit(finally_block)
+            self.cfg.add_edge(frame.entry_id, finally_body.entry_node_id)
+            self._connect_finally_exits(
+                frame,
+                finally_body.exit_node_ids,
+                join_id,
+                falls_through=bool(normal_exits or handler_exits),
+            )
+
+        return CFGTraversalResult(entry_node_id=entry_id, exit_node_ids=[join_id])
+
+    def visit_with_statement(self, node: Node) -> CFGTraversalResult:
+        """Visit with/async with as an implicit try/finally with one `__exit__` node"""
+        clause = next(c for c in node.children if c.type == "with_clause")
+        body_node = get_required_child_by_field_name(node, "body")
+
+        is_async = any(child.type == "async" for child in node.children)
+        header_text = f"{'async ' if is_async else ''}with {get_source_text(clause)}"
+        header_id = self.create_node(NodeType.STATEMENT, clause, header_text)
+        exit_id = self.create_node(NodeType.STATEMENT, source_text="__exit__")
+        self._cannot_raise.add(exit_id)
+
+        frame = _Finally(
+            entry_id=exit_id,
+            function_depth=len(self.context.exit_node_ids),
+            loop_depth=len(self.context.break_targets),
+        )
+        region = _Region()
+        self._finallys.append(frame)
+        self._regions.append(region)
+        body = self.visit(body_node)
+        self._regions.pop()
+        self._finallys.pop()
+
+        self.cfg.add_edge(header_id, body.entry_node_id)
+        for body_exit in body.exit_node_ids:
+            self.cfg.add_edge(body_exit, exit_id)
+        frame.reached_by_exception = self._close_region(region, exit_id)
+        for hop, kind in frame.pending:
+            self._link(exit_id, hop, kind)
+        if frame.reached_by_exception:
+            self._raise_from(exit_id, "exception")
+
+        return CFGTraversalResult(entry_node_id=header_id, exit_node_ids=[exit_id])
