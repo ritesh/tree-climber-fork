@@ -238,6 +238,65 @@ class TestCallsThatRunWhenTheNodeRuns:
         assert ("helper()", "ENTRY:helper", "function_call") in found
 
 
+class TestCallNodes:
+    """`call_nodes` is what `get_calls` is built on, and what structured call sites
+    (the taint-tracking epic) will read arguments and receivers from."""
+
+    @staticmethod
+    def call_texts(source: str):
+        tree = parse_source_to_ast(source, "python")
+        return [
+            call.text.decode() for call in PythonCFGVisitor.call_nodes(tree.root_node)
+        ]
+
+    def test_calls_come_in_source_order_outer_before_inner(self):
+        assert self.call_texts("f(g(x), h(y))\nk()") == [
+            "f(g(x), h(y))",
+            "g(x)",
+            "h(y)",
+            "k()",
+        ]
+
+    def test_a_call_with_an_unnamed_callee_is_still_a_call_node(self):
+        source = "f()()"
+
+        assert self.call_texts(source) == ["f()()", "f()"]
+        tree = parse_source_to_ast(source, "python")
+        assert PythonCFGVisitor().get_calls(tree.root_node) == ["f"]
+
+    def test_the_arguments_and_callee_are_reachable_from_the_node(self):
+        tree = parse_source_to_ast("obj.run(1, key=x)", "python")
+        (call,) = PythonCFGVisitor.call_nodes(tree.root_node)
+
+        function = call.child_by_field_name("function")
+        arguments = call.child_by_field_name("arguments")
+        assert function is not None and arguments is not None
+        assert function.text == b"obj.run"
+        assert [child.text for child in arguments.named_children] == [b"1", b"key=x"]
+
+    def test_definition_time_calls_count_and_function_bodies_do_not(self):
+        source = "@dec(a())\ndef g(x=default()) -> Ann():\n    inside()\n"
+
+        assert self.call_texts(source) == ["dec(a())", "a()", "default()", "Ann()"]
+
+    def test_lambda_bodies_and_comprehensions_count(self):
+        assert self.call_texts("sorted(xs, key=lambda v: f(v))") == [
+            "sorted(xs, key=lambda v: f(v))",
+            "f(v)",
+        ]
+        assert self.call_texts("[g(i) for i in items()]") == ["g(i)", "items()"]
+
+    def test_get_calls_names_exactly_the_named_call_nodes(self):
+        source = "a.b(c.d(e()), f)(g())\nh()"
+        tree = parse_source_to_ast(source, "python")
+        visitor = PythonCFGVisitor()
+
+        named = [
+            visitor._callee_name(call) for call in visitor.call_nodes(tree.root_node)
+        ]
+        assert visitor.get_calls(tree.root_node) == [n for n in named if n is not None]
+
+
 class TestDefinitionsInTheModuleFlow:
     """Classes and decorated functions are statements of the module flow; their
     bodies are separate subgraphs."""
