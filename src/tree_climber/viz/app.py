@@ -6,14 +6,13 @@ and return their Control Flow Graph (CFG) representation in JSON format.
 
 import logging
 import os
-from dataclasses import asdict
 from typing import Any, Dict, Optional
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, field_validator
 
-from tree_climber.ast_utils import ast_node_to_dict
+from tree_climber.ast_utils import ast_to_json
 from tree_climber.cfg.builder import CFGBuilder
 from tree_climber.dataflow.analyses.def_use import DefUseSolver
 from tree_climber.dataflow.analyses.reaching_definitions import (
@@ -143,7 +142,7 @@ async def parse_source_code(request: ParseRequest) -> ParseResponse:
             raise HTTPException(status_code=400, detail="Failed to parse source code.")
 
         # Convert AST to dictionary for JSON serialization
-        ast_dict = asdict(ast_node_to_dict(tree.root_node))
+        ast_dict = ast_to_json(tree.root_node)
 
         # Build CFG from AST
         cfg = builder.build_cfg(tree=tree)

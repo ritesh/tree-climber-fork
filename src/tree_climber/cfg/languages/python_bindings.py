@@ -18,7 +18,7 @@ Decisions worth knowing:
 """
 
 from dataclasses import dataclass, field
-from typing import Iterable, List, Optional
+from typing import Iterable, Iterator, List, Optional, Tuple, Union
 
 from tree_sitter import Node
 
@@ -49,7 +49,7 @@ class Bindings:
 def collect_bindings(node: Node) -> Bindings:
     """Collect de-duplicated definitions and uses under an AST node."""
     collector = _Collector()
-    collector.visit(node, frozenset())
+    collector.run((node, frozenset()))
     return collector.bindings
 
 
@@ -59,10 +59,10 @@ def collect_for_header_bindings(node: Node) -> Bindings:
     collector = _Collector()
     left = node.child_by_field_name("left")
     if left is not None:
-        collector.target(left, frozenset())
+        collector.run(collector.target(left, frozenset()))
     right = node.child_by_field_name("right")
     if right is not None:
-        collector.visit(right, frozenset())
+        collector.run((right, frozenset()))
     return collector.bindings
 
 
@@ -74,7 +74,7 @@ def collect_pattern_bindings(patterns: Iterable[Node]) -> Bindings:
     """
     collector = _Collector()
     for pattern in patterns:
-        collector.pattern(pattern)
+        collector.run(collector.pattern(pattern))
     return collector.bindings
 
 
@@ -131,9 +131,36 @@ def _target_names(node: Optional[Node]) -> List[str]:
     return []
 
 
+Visit = Tuple[Node, frozenset[str]]
+Task = Union[Visit, Iterator["Task"]]
+
+
 class _Collector:
+    """Walks a subtree and records definitions and uses.
+
+    Expressions nest one level per operator (`a = b = c`, `x + y + z`), so a
+    generated file can be thousands of levels deep. The walk therefore never
+    recurses on the Python stack: a handler is a generator that yields the
+    sub-walks it needs, either a node to visit or another generator, and `run`
+    drives them with an explicit stack. A sub-walk finishes before its handler
+    resumes, so the order of definitions and uses is the same as a recursive walk.
+    """
+
     def __init__(self) -> None:
         self.bindings = Bindings()
+
+    def run(self, *tasks: Task) -> None:
+        stack: List[Iterator[Task]] = [iter(tasks)]
+        while stack:
+            task = next(stack[-1], None)
+            if task is None:
+                stack.pop()
+            elif isinstance(task, tuple):
+                walk = self.visit(*task)
+                if walk is not None:
+                    stack.append(walk)
+            else:
+                stack.append(task)
 
     def define(self, name: str) -> None:
         if name not in self.bindings.definitions:
@@ -143,30 +170,33 @@ class _Collector:
         if name not in local and name not in self.bindings.uses:
             self.bindings.uses.append(name)
 
-    def visit(self, node: Node, local: frozenset[str]) -> None:
+    def visit(self, node: Node, local: frozenset[str]) -> Optional[Iterator[Task]]:
         handler = getattr(self, f"_visit_{node.type}", None)
         if handler is not None:
-            handler(node, local)
-        else:
-            self.visit_children(node, local)
+            return handler(node, local)
+        return self.visit_children(node, local)
 
     def visit_children(
         self,
         node: Node,
         local: frozenset[str],
         skip: Iterable[Optional[Node]] = (),
-    ) -> None:
+    ) -> Iterator[Task]:
         skipped = {child.id for child in skip if child is not None}
         for child in node.named_children:
             if child.id not in skipped:
-                self.visit(child, local)
+                yield (child, local)
 
-    def visit_field(self, node: Node, name: str, local: frozenset[str]) -> None:
+    def visit_field(
+        self, node: Node, name: str, local: frozenset[str]
+    ) -> Iterator[Task]:
         child = node.child_by_field_name(name)
         if child is not None:
-            self.visit(child, local)
+            yield (child, local)
 
-    def target(self, node: Node, local: frozenset[str], read: bool = False) -> None:
+    def target(
+        self, node: Node, local: frozenset[str], read: bool = False
+    ) -> Iterator[Task]:
         """Handle an assignment-like target: names defined, expressions used."""
         if node.type == "identifier":
             name = get_source_text(node)
@@ -174,19 +204,19 @@ class _Collector:
             if read:
                 self.use(name, local)
         elif node.type in ("attribute", "subscript"):
-            self.mutation_target(node, local)
+            yield self.mutation_target(node, local)
         elif node.type in SEQUENCE_TARGETS:
             for child in node.named_children:
-                self.target(child, local, read)
+                yield self.target(child, local, read)
         else:
-            self.visit(node, local)
+            yield (node, local)
 
-    def mutation_target(self, node: Node, local: frozenset[str]) -> None:
+    def mutation_target(self, node: Node, local: frozenset[str]) -> Iterator[Task]:
         current: Optional[Node] = node
         while current is not None and current.type in ("attribute", "subscript"):
             if current.type == "subscript":
                 value = current.child_by_field_name("value")
-                self.visit_children(current, local, skip=[value])
+                yield self.visit_children(current, local, skip=[value])
                 current = value
             else:
                 current = current.child_by_field_name("object")
@@ -198,9 +228,9 @@ class _Collector:
             self.define(name)
             self.use(name, local)
         else:
-            self.visit(current, local)
+            yield (current, local)
 
-    def pattern(self, node: Node) -> None:
+    def pattern(self, node: Node) -> Iterator[Task]:
         """Handle a `case` pattern node: names captured, and names read."""
         match node.type:
             case "dotted_name":
@@ -216,7 +246,7 @@ class _Collector:
             case "as_pattern":
                 named = node.named_children
                 for child in named[:-1]:
-                    self.pattern(child)
+                    yield self.pattern(child)
                 if len(named) > 1 and named[-1].type == "identifier":
                     self.define(get_source_text(named[-1]))
             case "class_pattern":
@@ -226,22 +256,24 @@ class _Collector:
                     if root:
                         self.use(get_source_text(root[0]), frozenset())
                 for child in named[1:]:
-                    self.pattern(child)
+                    yield self.pattern(child)
             case "keyword_pattern":
                 for child in node.named_children[1:]:
-                    self.pattern(child)
+                    yield self.pattern(child)
             case "dict_pattern":
                 for key in node.children_by_field_name("key"):
                     if key.type == "dotted_name":
-                        self.pattern(key)
+                        yield self.pattern(key)
                 for child in node.named_children:
                     if child.type == "splat_pattern" or child.type == "case_pattern":
-                        self.pattern(child)
+                        yield self.pattern(child)
             case "case_pattern" | "union_pattern" | "list_pattern" | "tuple_pattern":
                 for child in node.named_children:
-                    self.pattern(child)
+                    yield self.pattern(child)
 
-    def parameter_expressions(self, parameters: Node, local: frozenset[str]) -> None:
+    def parameter_expressions(
+        self, parameters: Node, local: frozenset[str]
+    ) -> Iterator[Task]:
         """Visit the expressions in parameters: defaults and annotations."""
         for parameter in parameters.named_children:
             if parameter.type in (
@@ -249,8 +281,8 @@ class _Collector:
                 "typed_parameter",
                 "typed_default_parameter",
             ):
-                self.visit_field(parameter, "type", local)
-                self.visit_field(parameter, "value", local)
+                yield self.visit_field(parameter, "type", local)
+                yield self.visit_field(parameter, "value", local)
 
     # Names and expressions
     def _visit_identifier(self, node: Node, local: frozenset[str]) -> None:
@@ -264,46 +296,52 @@ class _Collector:
                 return
         self.use(get_source_text(node), local)
 
-    def _visit_attribute(self, node: Node, local: frozenset[str]) -> None:
-        self.visit_field(node, "object", local)
+    def _visit_attribute(self, node: Node, local: frozenset[str]) -> Iterator[Task]:
+        return self.visit_field(node, "object", local)
 
-    def _visit_keyword_argument(self, node: Node, local: frozenset[str]) -> None:
-        self.visit_field(node, "value", local)
+    def _visit_keyword_argument(
+        self, node: Node, local: frozenset[str]
+    ) -> Iterator[Task]:
+        return self.visit_field(node, "value", local)
 
-    def _visit_named_expression(self, node: Node, local: frozenset[str]) -> None:
+    def _visit_named_expression(
+        self, node: Node, local: frozenset[str]
+    ) -> Iterator[Task]:
         name = node.child_by_field_name("name")
         if name is not None:
             self.define(get_source_text(name))
-        self.visit_field(node, "value", local)
+        return self.visit_field(node, "value", local)
 
     # Assignments and other binding statements
-    def _visit_assignment(self, node: Node, local: frozenset[str]) -> None:
+    def _visit_assignment(self, node: Node, local: frozenset[str]) -> Iterator[Task]:
         left = node.child_by_field_name("left")
         has_value = node.child_by_field_name("right") is not None
         if left is not None:
             if has_value:
-                self.target(left, local)
+                yield self.target(left, local)
             elif left.type != "identifier":
-                self.visit(left, local)
-        self.visit_children(node, local, skip=[left])
+                yield (left, local)
+        yield self.visit_children(node, local, skip=[left])
 
-    def _visit_augmented_assignment(self, node: Node, local: frozenset[str]) -> None:
+    def _visit_augmented_assignment(
+        self, node: Node, local: frozenset[str]
+    ) -> Iterator[Task]:
         left = node.child_by_field_name("left")
         if left is not None:
-            self.target(left, local, read=True)
-        self.visit_children(node, local, skip=[left])
+            yield self.target(left, local, read=True)
+        yield self.visit_children(node, local, skip=[left])
 
-    def _visit_for_statement(self, node: Node, local: frozenset[str]) -> None:
+    def _visit_for_statement(self, node: Node, local: frozenset[str]) -> Iterator[Task]:
         left = node.child_by_field_name("left")
         if left is not None:
-            self.target(left, local)
-        self.visit_children(node, local, skip=[left])
+            yield self.target(left, local)
+        yield self.visit_children(node, local, skip=[left])
 
-    def _visit_as_pattern(self, node: Node, local: frozenset[str]) -> None:
+    def _visit_as_pattern(self, node: Node, local: frozenset[str]) -> Iterator[Task]:
         alias = node.child_by_field_name("alias")
         if alias is not None:
-            self.target(alias, local)
-        self.visit_children(node, local, skip=[alias])
+            yield self.target(alias, local)
+        yield self.visit_children(node, local, skip=[alias])
 
     def _visit_import_statement(self, node: Node, local: frozenset[str]) -> None:
         for imported in node.children_by_field_name("name"):
@@ -322,30 +360,36 @@ class _Collector:
     _visit_nonlocal_statement = _visit_global_statement
 
     # Nested scopes
-    def _visit_function_definition(self, node: Node, local: frozenset[str]) -> None:
+    def _visit_function_definition(
+        self, node: Node, local: frozenset[str]
+    ) -> Iterator[Task]:
         name = node.child_by_field_name("name")
         if name is not None:
             self.define(get_source_text(name))
         parameters = node.child_by_field_name("parameters")
         if parameters is not None:
-            self.parameter_expressions(parameters, local)
-        self.visit_field(node, "return_type", local)
+            yield self.parameter_expressions(parameters, local)
+        yield self.visit_field(node, "return_type", local)
 
-    def _visit_class_definition(self, node: Node, local: frozenset[str]) -> None:
+    def _visit_class_definition(
+        self, node: Node, local: frozenset[str]
+    ) -> Iterator[Task]:
         name = node.child_by_field_name("name")
         if name is not None:
             self.define(get_source_text(name))
-        self.visit_field(node, "superclasses", local)
+        return self.visit_field(node, "superclasses", local)
 
-    def _visit_lambda(self, node: Node, local: frozenset[str]) -> None:
+    def _visit_lambda(self, node: Node, local: frozenset[str]) -> Iterator[Task]:
         parameters = node.child_by_field_name("parameters")
         inner = local
         if parameters is not None:
-            self.parameter_expressions(parameters, local)
+            yield self.parameter_expressions(parameters, local)
             inner = local | frozenset(parameter_names(parameters))
-        self.visit_field(node, "body", inner)
+        yield self.visit_field(node, "body", inner)
 
-    def _visit_list_comprehension(self, node: Node, local: frozenset[str]) -> None:
+    def _visit_list_comprehension(
+        self, node: Node, local: frozenset[str]
+    ) -> Iterator[Task]:
         clauses = [c for c in node.named_children if c.type == "for_in_clause"]
         bound = {
             name
@@ -356,12 +400,12 @@ class _Collector:
 
         for child in node.named_children:
             if child.type != "for_in_clause":
-                self.visit(child, inner)
+                yield (child, inner)
                 continue
             # Only the first iterable is evaluated in the enclosing scope
             scope = local if child.id == clauses[0].id else inner
             for right in child.children_by_field_name("right"):
-                self.visit(right, scope)
+                yield (right, scope)
 
     _visit_set_comprehension = _visit_list_comprehension
     _visit_dictionary_comprehension = _visit_list_comprehension

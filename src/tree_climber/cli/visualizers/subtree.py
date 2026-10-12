@@ -2,6 +2,7 @@ from typing import override
 
 import pygraphviz as pgv
 
+from tree_climber.ast_utils import iter_ast_edges
 from tree_climber.cli.visualizers.base_visualizer import (
     BaseVisualizer,
     get_node_display,
@@ -93,48 +94,6 @@ class SubtreeVisualizer(BaseVisualizer):
             )
             sg.graph_attr.update(rank="TB", ranksep="0.15", nodesep="0.1")
 
-            def add_ast_subtree(parent_ts_node):
-                parent_vis_id = f"{node_id}__ast_{parent_ts_node.id}"
-                if not G.has_node(parent_vis_id):
-                    sg.add_node(
-                        parent_vis_id,
-                        label=format_ast_node_label(parent_ts_node),
-                        shape="box",
-                        fontsize=str(AST_OVERLAY_FONT_SIZE),
-                        fillcolor=AST_OVERLAY_NODE_COLOR,
-                        color=AST_OVERLAY_BORDER_COLOR,
-                    )
-                child_nodes = [
-                    c
-                    for c in getattr(parent_ts_node, "children", [])
-                    if (
-                        not AST_OVERLAY_SHOW_ONLY_NAMED or getattr(c, "is_named", False)
-                    )
-                ]
-                for c in child_nodes:
-                    child_vis_id = f"{node_id}__ast_{c.id}"
-                    if not G.has_node(child_vis_id):
-                        sg.add_node(
-                            child_vis_id,
-                            label=format_ast_node_label(c),
-                            shape="box",
-                            fontsize=str(AST_OVERLAY_FONT_SIZE),
-                            fillcolor=AST_OVERLAY_NODE_COLOR,
-                            color=AST_OVERLAY_BORDER_COLOR,
-                        )
-                    sg.add_edge(
-                        parent_vis_id,
-                        child_vis_id,
-                        color=AST_OVERLAY_EDGE_COLOR,
-                        style="solid",
-                        penwidth="1",
-                        arrowhead="none",
-                        weight="0.2",
-                        minlen="1",
-                        constraint="true",
-                    )
-                    add_ast_subtree(c)
-
             root_vis_id = f"{node_id}__ast_{ts_node.id}"
             if not G.has_node(root_vis_id):
                 sg.add_node(
@@ -166,7 +125,28 @@ class SubtreeVisualizer(BaseVisualizer):
                 minlen="1",
                 constraint="false",
             )
-            add_ast_subtree(ts_node)
+            for parent, child in iter_ast_edges(ts_node, AST_OVERLAY_SHOW_ONLY_NAMED):
+                child_vis_id = f"{node_id}__ast_{child.id}"
+                if not G.has_node(child_vis_id):
+                    sg.add_node(
+                        child_vis_id,
+                        label=format_ast_node_label(child),
+                        shape="box",
+                        fontsize=str(AST_OVERLAY_FONT_SIZE),
+                        fillcolor=AST_OVERLAY_NODE_COLOR,
+                        color=AST_OVERLAY_BORDER_COLOR,
+                    )
+                sg.add_edge(
+                    f"{node_id}__ast_{parent.id}",
+                    child_vis_id,
+                    color=AST_OVERLAY_EDGE_COLOR,
+                    style="solid",
+                    penwidth="1",
+                    arrowhead="none",
+                    weight="0.2",
+                    minlen="1",
+                    constraint="true",
+                )
 
         G.draw(str(self.output_path("cpg")), prog="dot")
         print(f"Saved CPG visualization: {self.output_path('cpg')}")

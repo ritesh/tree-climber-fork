@@ -6,6 +6,7 @@ from tree_sitter import Node
 from tree_climber.cli.visualizers.base_visualizer import (
     BaseVisualizer,
 )
+from tree_climber.ast_utils import iter_ast_edges
 from tree_climber.cli.visualizers.utils import ast_label
 
 from .constants import (
@@ -53,22 +54,12 @@ class ASTVisualizer(BaseVisualizer):
                 color=AST_OVERLAY_BORDER_COLOR,
             )
 
-        def add_ast(G: pgv.AGraph, ts_node: Node):
-            nid = f"ast_{ts_node.id}"
-            if not G.has_node(nid):
-                add_ast_node(G, ts_node, nid)
-            children = [
-                c
-                for c in ts_node.children
-                if (not AST_OVERLAY_SHOW_ONLY_NAMED or c.is_named)
-            ]
-            for c in children:
-                cid = f"ast_{c.id}"
-                if not G.has_node(cid):
-                    add_ast_node(G, c, cid)
-                G.add_edge(nid, cid)
-                add_ast(G, c)
-
-        add_ast(G_ast, ast_root.root_node)
+        root = ast_root.root_node
+        add_ast_node(G_ast, root, f"ast_{root.id}")
+        for parent, child in iter_ast_edges(root, AST_OVERLAY_SHOW_ONLY_NAMED):
+            cid = f"ast_{child.id}"
+            if not G_ast.has_node(cid):
+                add_ast_node(G_ast, child, cid)
+            G_ast.add_edge(f"ast_{parent.id}", cid)
         G_ast.draw(str(self.output_path("ast")), prog="dot")
         print(f"Saved AST visualization: {self.output_path('ast')}")
