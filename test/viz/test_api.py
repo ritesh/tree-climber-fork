@@ -65,7 +65,7 @@ def test_parse_endpoint(language, source):
 
 
 def test_parse_endpoint_python():
-    source = "def foo():\n    return 42\n"
+    source = "def foo():\n    x = 42\n    return x\n"
     request = ParseRequest.model_validate({"source_code": source, "language": "python"})
 
     response = asyncio.run(parse_source_code(request))
@@ -75,6 +75,8 @@ def test_parse_endpoint_python():
     assert len(response.cfg["nodes"]) > 0
     assert response.cfg["entry_node_ids"]
     assert response.ast is not None
+    assert response.dfg is not None
+    assert response.dfg["edges"], "x = 42 should reach its use in the return"
 
 
 def test_unsupported_language_is_rejected():
