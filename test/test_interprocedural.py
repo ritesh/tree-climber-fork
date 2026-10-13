@@ -476,6 +476,18 @@ class TestC:
     def test_a_function_pointer_call_has_no_flows(self):
         assert arguments("c", "void f(int x) { (*fp)(x); s->cb(x); }\n") == set()
 
+    def test_functions_returning_pointers(self):
+        source = (
+            "char *read(int fd) { return 0; }\n"
+            "int (*pick(int which))(int) { return 0; }\n"
+            "void main() { char *s = read(3); pick(s); }\n"
+        )
+        assert arguments("c", source) == {
+            ("char *s = read(3);", 0, "ENTRY:read", "fd"),
+            ("pick(s);", 0, "ENTRY:pick", "which"),
+        }
+        assert ("return 0;", "char *s = read(3);") in returns("c", source)
+
 
 class TestJava:
     SOURCE = (

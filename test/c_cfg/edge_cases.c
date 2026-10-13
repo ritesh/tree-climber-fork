@@ -10,6 +10,7 @@
  * - Complex conditional expressions
  * - Very long switch statements
  * - Functions with many parameters
+ * - Functions returning pointers, and a function returning a function pointer
  * 
  * Use for: Robustness testing, error condition handling
  * 
@@ -249,5 +250,29 @@ int many_parameters(int a, int b, int c, int d, int e,
 
 // Minimal valid C program
 int minimal() {
+    return 0;
+}
+
+// Functions returning pointers (the function's declarator is wrapped)
+int *first_element(int *values) {
+    return values;
+}
+
+static const char *const greeting(void) {
+    return "hello";
+}
+
+int **pointer_to(int **cell) {
+    if (cell) {
+        return cell;
+    }
+    return 0;
+}
+
+// Function returning a function pointer: the outer (int) is the returned type's
+int (*pick_handler(int which))(int) {
+    if (which) {
+        return 0;
+    }
     return 0;
 }

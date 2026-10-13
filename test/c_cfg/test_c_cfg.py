@@ -236,6 +236,55 @@ class TestBasicControlFlow:
             "Empty function should have entry, exit, and empty block placeholder",
         )
 
+    @pytest.mark.parametrize(
+        "code, name, parameters",
+        [
+            ("int *first(int *values) { return values; }", "first", ["values"]),
+            ("int **pointer_to(int **cell) { return cell; }", "pointer_to", ["cell"]),
+            ('static const char *const hello(void) { return "hi"; }', "hello", []),
+            ("int (*pick(int which))(int) { return 0; }", "pick", ["which"]),
+            ("int (f)(int a) { return a; }", "f", ["a"]),
+            ("int f [[nodiscard]] (void) { return 0; }", "f", []),
+            (
+                "int (*(*nest(int a, int b))(int))(char) { return 0; }",
+                "nest",
+                ["a", "b"],
+            ),
+        ],
+    )
+    def test_function_returning_a_pointer(self, helper, code, name, parameters):
+        """The function's own declarator is found inside pointer and
+        function-pointer return types (#62)."""
+        cfg = helper.build_cfg_from_code(code)
+
+        entry_node, _ = helper.assert_single_entry_exit(cfg)
+        assert entry_node.source_text == name
+        assert entry_node.metadata.variable_definitions == parameters
+        assert entry_node.metadata.function is not None
+        assert [p.name for p in entry_node.metadata.function.parameters] == parameters
+        assert cfg.context.function_definitions == {entry_node.id: name}
+
+    def test_a_definition_without_a_function_declarator_is_an_error(self, helper):
+        with pytest.raises(ValueError, match="No function declarator"):
+            helper.build_cfg_from_code("int x { return 0; }")
+
+    def test_calls_to_a_function_returning_a_pointer_are_linked(self, helper):
+        code = """
+        int *make(int n) { return &n; }
+        void use() { int *p = make(3); }
+        """
+        cfg = helper.build_cfg_from_code(code)
+
+        make = next(
+            n
+            for n in cfg.nodes.values()
+            if n.node_type == NodeType.ENTRY and n.source_text == "make"
+        )
+        call = next(
+            n for n in cfg.nodes.values() if n.source_text == "int *p = make(3);"
+        )
+        assert call.edge_labels.get(make.id) == "function_call"
+
 
 class TestConditionalStatements:
     """Test conditional statement constructs."""
