@@ -18,7 +18,7 @@ Decisions worth knowing:
 """
 
 from dataclasses import dataclass, field
-from typing import Iterable, Iterator, List, Optional, Tuple, Union
+from typing import Dict, Iterable, Iterator, List, Optional, Tuple, Union
 
 from tree_sitter import Node
 
@@ -64,6 +64,28 @@ def collect_for_header_bindings(node: Node) -> Bindings:
     if right is not None:
         collector.run((right, frozenset()))
     return collector.bindings
+
+
+def collect_uses(node: Node, cache: Optional[Dict[int, List[str]]] = None) -> List[str]:
+    """The uses under an AST node, same as `collect_bindings(node).uses`.
+
+    With a `cache` of earlier results, keyed by node id, a node found in it is
+    not walked again, so the uses of a nested call cost once instead of once per
+    enclosing call. A cached list was computed with no enclosing scope; replaying
+    it through `use` drops the names an enclosing comprehension or lambda binds,
+    which is what walking the node there would do.
+    """
+    collector = _Collector(cache)
+    collector.run((node, frozenset()))
+    return collector.bindings.uses
+
+
+def target_names(node: Node) -> List[str]:
+    """Names an assignment-like target defines: `a`, `a, (b, *c)`, and the root
+    name of `a.b` / `a[i]` (a weak update)."""
+    collector = _Collector()
+    collector.run(collector.target(node, frozenset()))
+    return collector.bindings.definitions
 
 
 def collect_pattern_bindings(patterns: Iterable[Node]) -> Bindings:
@@ -146,8 +168,9 @@ class _Collector:
     resumes, so the order of definitions and uses is the same as a recursive walk.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, uses_cache: Optional[Dict[int, List[str]]] = None) -> None:
         self.bindings = Bindings()
+        self.uses_cache = uses_cache
 
     def run(self, *tasks: Task) -> None:
         stack: List[Iterator[Task]] = [iter(tasks)]
@@ -171,6 +194,12 @@ class _Collector:
             self.bindings.uses.append(name)
 
     def visit(self, node: Node, local: frozenset[str]) -> Optional[Iterator[Task]]:
+        if self.uses_cache is not None:
+            known = self.uses_cache.get(node.id)
+            if known is not None:
+                for name in known:
+                    self.use(name, local)
+                return None
         handler = getattr(self, f"_visit_{node.type}", None)
         if handler is not None:
             return handler(node, local)

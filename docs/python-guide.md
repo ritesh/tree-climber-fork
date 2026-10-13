@@ -538,6 +538,46 @@ Check:
 - `async with` ends in an `__aexit__` node (`__exit__` for a plain `with`), and `async for` is a loop header like `for`, with the same `else` handling;
 - a lambda is the same: its calls (`helper` in `lambda v: helper(v)`) count as calls of the statement that contains it, and its parameter is not a use.
 
+### Call sites: what each call was given and where its result goes
+
+Every call in a node is described by a `CallSite` in `node.metadata.call_sites` (and in the `call_sites` key of `/parse` node metadata). `function_calls` is the list of their names.
+
+```python
+def handler(request):
+    name = request.args.get("name", default=fallback())
+    cmd = clean("ls " + name).strip()
+    run(cmd, shell=True, *opts)
+```
+
+```
+'name = request.args.get("name", default=fallback())'
+  [0] callee='get' callee_text='request.args.get' receiver='request.args'
+      args=[('positional', '"name"', []), ('keyword:default', 'fallback()', ['fallback'])]
+      assigned_to=['name'] feeds=None
+  [1] callee='fallback' callee_text='fallback' receiver=None
+      args=[]
+      assigned_to=[] feeds=(0, 'argument', 1)
+'cmd = clean("ls " + name).strip()'
+  [0] callee='strip' callee_text='clean("ls " + name).strip' receiver='clean("ls " + name)'
+      args=[]
+      assigned_to=['cmd'] feeds=None
+  [1] callee='clean' callee_text='clean' receiver=None
+      args=[('positional', '"ls " + name', ['name'])]
+      assigned_to=[] feeds=(0, 'receiver', None)
+'run(cmd, shell=True, *opts)'
+  [0] callee='run' callee_text='run' receiver=None
+      args=[('positional', 'cmd', ['cmd']), ('keyword:shell', 'True', []), ('star', 'opts', ['opts'])]
+      assigned_to=[] feeds=None
+```
+
+Check:
+- sites are in source order, an outer call before the calls inside it, and `feeds` points at an index in the same node's list: `fallback()` is argument 1 of the `get` call, and `clean(...)` is the receiver of `.strip()`;
+- `callee` is the name used to link calls to functions (the final attribute for `obj.method()`), `callee_text` is the whole callee expression (`request.args.get`, which is what a sink or source rule would match), and `receiver` is the object it is called on;
+- an argument carries its text, the variables it reads, and its kind (`positional`, `keyword`, `star` for `*args`, `double_star` for `**kwargs`);
+- `assigned_to` is set only when the call is the whole right-hand side of the assignment (`x = f()`, `a, b = f()`, `x = y = f()`, `x += f()`, `with f() as h`, `(x := f())`); in `cmd = "ls " + input()` the call is just an operand, so `assigned_to` is empty and the node's definitions and uses carry that flow;
+- a call without a usable name (`f()(x)`, `handlers[k](x)`) is still a site, with `callee=None`, and is left out of `function_calls`;
+- the same structure exists for C and Java: `s->cb(x)` and `(*fp)(x)` in C are sites with no name; Java `new Foo(x)` is not a call site yet.
+
 ## 4. HTTP API
 
 ```bash

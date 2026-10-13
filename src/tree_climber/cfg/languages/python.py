@@ -29,7 +29,12 @@ from tree_climber.ast_utils import (
     get_required_child_by_field_name,
     get_source_text,
 )
-from tree_climber.cfg.cfg_types import CFGTraversalResult, NodeType
+from tree_climber.cfg.cfg_types import CallSite, CFGTraversalResult, NodeType
+from tree_climber.cfg.languages.python_calls import (
+    call_nodes,
+    call_sites,
+    decorator_call_sites,
+)
 from tree_climber.cfg.languages.python_bindings import (
     collect_bindings,
     collect_for_header_bindings,
@@ -83,48 +88,13 @@ class PythonCFGVisitor(CFGVisitor):
 
     # AST utilities
     @staticmethod
-    def _callee_name(call: Node) -> Optional[str]:
-        function = call.child_by_field_name("function")
-        if function is None:
-            return None
-        if function.type == "identifier":
-            return get_source_text(function)
-        if function.type == "attribute":
-            attribute = function.child_by_field_name("attribute")
-            return get_source_text(attribute) if attribute else None
-        return None
-
-    @staticmethod
     def call_nodes(ast_node: Node) -> Iterator[Node]:
-        """The `call` nodes that run when the node executes, in source order.
+        """The `call` nodes that run when the node executes, in source order."""
+        return call_nodes(ast_node)
 
-        A function's body does not run when it is defined, so it is skipped; its
-        decorators, default values, and annotations are evaluated then, so they
-        count. A class body does run at definition time, so it counts, minus its
-        methods' bodies. Lambda bodies count, since they usually run during the
-        statement that creates them (`sorted(xs, key=lambda x: f(x))`).
-        """
-        stack = [ast_node]
-        while stack:
-            node = stack.pop()
-            if node.type == "call":
-                yield node
-            children = node.children
-            if node.type == "function_definition":
-                body = node.child_by_field_name("body")
-                if body is not None:
-                    children = [child for child in children if child.id != body.id]
-            stack.extend(reversed(children))
-
-    def get_calls(self, ast_node: Node) -> List[str]:
-        """Extract called function names under an AST node.
-
-        `foo()` records `foo`; `obj.method()` and `pkg.fn()` record the final
-        attribute name. Other callees, such as `f()()`, record nothing for the
-        outer call. See `call_nodes` for which calls count.
-        """
-        names = (self._callee_name(call) for call in self.call_nodes(ast_node))
-        return [name for name in names if name is not None]
+    def get_call_sites(self, ast_node: Node) -> List[CallSite]:
+        """One call site per call under an AST node that runs when it executes."""
+        return call_sites(ast_node)
 
     def get_definitions(self, ast_node: Node) -> List[str]:
         """Extract variable definitions under an AST node."""
@@ -397,31 +367,16 @@ class PythonCFGVisitor(CFGVisitor):
         metadata = self.cfg.nodes[node_id].metadata
         metadata.variable_definitions = bindings.definitions
         metadata.variable_uses = bindings.uses
-        metadata.function_calls = self.get_calls(node) + self._decorator_calls(node)
+        metadata.call_sites = self.get_call_sites(node) + decorator_call_sites(node)
+        metadata.function_calls = [
+            site.callee for site in metadata.call_sites if site.callee is not None
+        ]
 
         if definition.type == "function_definition":
             self._visit_function(definition)
         else:
             self._visit_methods(definition, get_source_text(name_node))
         return CFGTraversalResult(entry_node_id=node_id, exit_node_ids=[node_id])
-
-    def _decorator_calls(self, node: Node) -> List[str]:
-        """Names called by decorators that are not themselves calls: `@cache` and
-        `@functools.cache` call `cache`. (`@route("/x")` records `route` already.)"""
-        names = []
-        for decorator in node.children:
-            if decorator.type != "decorator":
-                continue
-            expression = next(iter(decorator.named_children), None)
-            if expression is None:
-                continue
-            if expression.type == "identifier":
-                names.append(get_source_text(expression))
-            elif expression.type == "attribute":
-                attribute = expression.child_by_field_name("attribute")
-                if attribute is not None:
-                    names.append(get_source_text(attribute))
-        return names
 
     def _visit_methods(self, class_node: Node, qualifier: str) -> None:
         """Build a subgraph for each method of a class, and of classes nested in it."""
@@ -630,6 +585,7 @@ class PythonCFGVisitor(CFGVisitor):
             metadata.variable_definitions = []
             metadata.variable_uses = bindings.uses
             metadata.function_calls = []
+            metadata.call_sites = []
             for source_id, label in pending:
                 self.cfg.add_edge(source_id, case_id, label)
             pending = []
@@ -646,6 +602,7 @@ class PythonCFGVisitor(CFGVisitor):
                 metadata.variable_definitions = bindings.definitions
                 metadata.variable_uses = []
                 metadata.function_calls = []
+                metadata.call_sites = []
                 self.cfg.add_edge(case_id, capture_id, "true")
                 tail_id, tail_label = capture_id, None
 

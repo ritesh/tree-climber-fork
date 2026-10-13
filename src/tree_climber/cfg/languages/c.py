@@ -3,7 +3,7 @@ Control Flow Graph (CFG) Generator Framework using py-tree-sitter for C language
 This framework uses the visitor pattern with depth-first traversal to build CFGs.
 """
 
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from tree_sitter import Node
 
@@ -14,7 +14,18 @@ from tree_climber.ast_utils import (
     get_required_child_by_type,
     get_source_text,
 )
-from tree_climber.cfg.cfg_types import CFGTraversalResult, NodeType
+from tree_climber.cfg.call_sites import (
+    CallRegions,
+    link_call_flows,
+    preorder,
+    with_span,
+)
+from tree_climber.cfg.cfg_types import (
+    CallArgument,
+    CallSite,
+    CFGTraversalResult,
+    NodeType,
+)
 from tree_climber.cfg.visitor import CFGVisitor
 
 
@@ -50,22 +61,81 @@ class CCFGVisitor(CFGVisitor):
         return CFGTraversalResult(entry_node_id=node_id, exit_node_ids=[node_id])
 
     # AST utilities
-    def get_calls(self, ast_node: Node) -> List[str]:
-        """Extract function calls under an AST node."""
+    @staticmethod
+    def _argument_nodes(call: Node) -> List[Node]:
+        arguments = call.child_by_field_name("arguments")
+        if arguments is None:
+            return []
+        return [c for c in arguments.named_children if c.type != "comment"]
 
-        def process_call(node: Node) -> Optional[str]:
-            if node.type == "call_expression":
-                identifier = None
-                for child in node.children:
-                    if child.type == "identifier":
-                        assert identifier is None, (
-                            "Multiple identifiers found in call expression"
-                        )
-                        identifier = get_source_text(child)
-                return identifier
-            return None
+    @staticmethod
+    def _receiver(call: Node) -> Optional[Node]:
+        function = call.child_by_field_name("function")
+        if function is not None and function.type == "field_expression":
+            return function.child_by_field_name("argument")
+        return None
 
-        return dfs(ast_node, process_call)
+    def _assigned_names(self, call: Node) -> List[str]:
+        """Variables that receive the call's result when the call is the whole
+        right-hand side: `T x = f();`, `x = f();`, `a = b = f();`, `x += f();`,
+        through parentheses and casts."""
+        names: List[str] = []
+        node = call
+        while node.parent is not None:
+            parent = node.parent
+            if parent.type in ("parenthesized_expression", "cast_expression"):
+                pass
+            elif parent.type == "init_declarator":
+                value = parent.child_by_field_name("value")
+                if value is not None and value.id == node.id:
+                    name = self._declared_identifier(
+                        parent.child_by_field_name("declarator")
+                    )
+                    if name is not None:
+                        names.append(get_source_text(name))
+                break
+            elif parent.type == "assignment_expression":
+                right = parent.child_by_field_name("right")
+                if right is None or right.id != node.id:
+                    break
+                written = self._written_variable(parent.child_by_field_name("left"))
+                if written is not None:
+                    names.insert(0, written)
+            else:
+                break
+            node = parent
+        return list(dict.fromkeys(names))
+
+    def get_call_sites(self, ast_node: Node) -> List[CallSite]:
+        """Describe every call under an AST node. Only a plain `name(...)` call has
+        a callee name; `(*fp)(x)` and `s->cb(x)` are sites without one."""
+        pairs: List[Tuple[CallSite, Node]] = []
+        for call in preorder(ast_node):
+            if call.type != "call_expression":
+                continue
+            function = call.child_by_field_name("function")
+            receiver = self._receiver(call)
+            site = CallSite(
+                callee=get_source_text(function)
+                if function is not None and function.type == "identifier"
+                else None,
+                callee_text=get_source_text(function) if function else "",
+                receiver=get_source_text(receiver) if receiver else None,
+                arguments=[
+                    CallArgument(text=get_source_text(a), uses=self.get_uses(a))
+                    for a in self._argument_nodes(call)
+                ],
+                assigned_to=self._assigned_names(call),
+            )
+            pairs.append((with_span(site, call), call))
+        link_call_flows(
+            pairs,
+            lambda call: CallRegions(
+                arguments=self._argument_nodes(call), receiver=self._receiver(call)
+            ),
+            frozenset(),
+        )
+        return [site for site, _ in pairs]
 
     DECLARATOR_WRAPPERS = (
         "pointer_declarator",

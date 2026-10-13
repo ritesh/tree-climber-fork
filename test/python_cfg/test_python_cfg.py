@@ -19,6 +19,7 @@ from cfg_helpers import (
 
 from tree_climber.ast_utils import parse_source_to_ast
 from tree_climber.cfg.languages.python import PythonCFGVisitor
+from tree_climber.cfg.languages.python_calls import callee_name
 from tree_climber.cfg.visitor import CFG
 
 FIXTURE = Path(__file__).parent / "basic_constructs.py"
@@ -291,9 +292,7 @@ class TestCallNodes:
         tree = parse_source_to_ast(source, "python")
         visitor = PythonCFGVisitor()
 
-        named = [
-            visitor._callee_name(call) for call in visitor.call_nodes(tree.root_node)
-        ]
+        named = [callee_name(call) for call in visitor.call_nodes(tree.root_node)]
         assert visitor.get_calls(tree.root_node) == [n for n in named if n is not None]
 
 

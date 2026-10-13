@@ -43,6 +43,11 @@ PROGRAMS = {
     ("python", "sum"): f"x = {ONES}\n",
     ("python", "nested calls"): "x = " + "f(" * DEPTH + "0" + ")" * DEPTH + "\n",
     ("python", "method chain"): "x = obj" + ".m()" * DEPTH + "\n",
+    ("python", "nested call arguments"): "x = "
+    + "f(a, " * DEPTH
+    + "0"
+    + ")" * DEPTH
+    + "\n",
     ("python", "attribute chain"): "x = obj" + ".a" * DEPTH + "\n",
     ("python", "boolean chain"): "x = " + " and ".join(NAMES) + "\n",
     ("python", "string concatenation"): "x = "
@@ -146,6 +151,24 @@ class TestPythonResults:
 
         assert metadata.function_calls == ["f"] * DEPTH
         assert metadata.variable_uses == ["f"]
+
+    def test_every_call_of_a_deep_chain_is_a_site_linked_to_the_next(self):
+        metadata = self.statement_metadata(PROGRAMS[("python", "method chain")])
+
+        sites = metadata.call_sites
+        assert len(sites) == DEPTH
+        assert sites[0].assigned_to == ["x"]
+        assert all(site.feeds is not None for site in sites[1:])
+        assert sites[-1].receiver == "obj"
+
+    def test_nested_call_arguments_use_each_name_once_per_level(self):
+        metadata = self.statement_metadata(
+            PROGRAMS[("python", "nested call arguments")]
+        )
+
+        assert len(metadata.call_sites) == DEPTH
+        assert metadata.call_sites[0].arguments[0].uses == ["a"]
+        assert metadata.call_sites[0].arguments[1].uses == ["f", "a"]
 
     def test_a_deep_subscript_write_is_a_weak_update_of_the_root(self):
         metadata = self.statement_metadata(
