@@ -3,6 +3,7 @@ from typing import override
 import pygraphviz as pgv
 from tree_sitter import Node
 
+from tree_climber.ast_utils import iter_ast_edges
 from tree_climber.cli.visualizers.base_visualizer import (
     BaseVisualizer,
     get_node_display,
@@ -47,7 +48,7 @@ class BiGraphVisualizer(BaseVisualizer):
         )
         G.node_attr.update(style="filled")
 
-        def add_ast_into(ts_node: Node):
+        def add_ast_node(ts_node: Node):
             nid = f"ast_{ts_node.id}"
             if not G.has_node(nid):
                 G.add_node(
@@ -59,34 +60,19 @@ class BiGraphVisualizer(BaseVisualizer):
                     color=AST_OVERLAY_BORDER_COLOR,
                     style="filled",
                 )
-            children = [
-                c
-                for c in ts_node.children
-                if (not AST_OVERLAY_SHOW_ONLY_NAMED or c.is_named)
-            ]
-            for c in children:
-                cid = f"ast_{c.id}"
-                if not G.has_node(cid):
-                    G.add_node(
-                        cid,
-                        label=ast_label(c),
-                        shape="box",
-                        fontsize=str(AST_OVERLAY_FONT_SIZE),
-                        fillcolor=AST_OVERLAY_NODE_COLOR,
-                        color=AST_OVERLAY_BORDER_COLOR,
-                        style="filled",
-                    )
-                G.add_edge(
-                    nid,
-                    cid,
-                    arrowhead="none",
-                    tailport="s",
-                    headport="n",
-                    color=AST_OVERLAY_EDGE_COLOR,
-                )
-                add_ast_into(c)
 
-        add_ast_into(ast_root.root_node)
+        root = ast_root.root_node
+        add_ast_node(root)
+        for parent, child in iter_ast_edges(root, AST_OVERLAY_SHOW_ONLY_NAMED):
+            add_ast_node(child)
+            G.add_edge(
+                f"ast_{parent.id}",
+                f"ast_{child.id}",
+                arrowhead="none",
+                tailport="s",
+                headport="n",
+                color=AST_OVERLAY_EDGE_COLOR,
+            )
 
         # Add CFG nodes and link each to its AST node if available
         for node_id, node in cfg.nodes.items():

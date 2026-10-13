@@ -1,5 +1,4 @@
-from dataclasses import dataclass
-from typing import Callable, List, Optional
+from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple
 
 from tree_sitter import Node, Tree
 from tree_sitter_languages import get_parser
@@ -33,46 +32,54 @@ def get_source_text(node: Node) -> str:
     return node.text.decode("utf-8") if node.text else ""
 
 
-@dataclass
-class ProgramPoint:
-    """Data class representing a program point with row and column."""
-
-    row: int
-    column: int
-
-
-@dataclass
-class ASTNode:
-    """Data class representing an AST node with its properties."""
-
-    id: int
-    node_type: str
-    start_point: ProgramPoint
-    end_point: ProgramPoint
-    start_byte: int
-    end_byte: int
-    text: str
-    is_named: bool
-    children: List["ASTNode"]
+def _postorder(node: Node) -> Iterator[Tuple[Node, bool]]:
+    """Yield (node, children_done) pairs: each node once before and once after
+    its children, without recursion (expressions can nest thousands deep)."""
+    stack = [(node, False)]
+    while stack:
+        current, children_done = stack.pop()
+        yield current, children_done
+        if not children_done:
+            stack.append((current, True))
+            stack.extend((child, False) for child in reversed(current.children))
 
 
-def ast_node_to_dict(node: Node) -> ASTNode:
-    children = []
+def ast_to_json(node: Node) -> Dict[str, Any]:
+    """The AST as nested plain dictionaries, for the web API, built without
+    recursion."""
+    built: Dict[int, Dict[str, Any]] = {}
+    for current, children_done in _postorder(node):
+        if not children_done:
+            continue
+        built[current.id] = {
+            "id": current.id,
+            "node_type": current.type,
+            "start_point": {
+                "row": current.start_point[0],
+                "column": current.start_point[1],
+            },
+            "end_point": {"row": current.end_point[0], "column": current.end_point[1]},
+            "start_byte": current.start_byte,
+            "end_byte": current.end_byte,
+            "text": get_source_text(current),
+            "is_named": current.is_named,
+            "children": [built.pop(child.id) for child in current.children],
+        }
+    return built[node.id]
 
-    for child in node.children:
-        children.append(ast_node_to_dict(child))
 
-    return ASTNode(
-        id=node.id,
-        node_type=node.type,
-        start_point=ProgramPoint(row=node.start_point[0], column=node.start_point[1]),
-        end_point=ProgramPoint(row=node.end_point[0], column=node.end_point[1]),
-        start_byte=node.start_byte,
-        end_byte=node.end_byte,
-        text=get_source_text(node),
-        is_named=node.is_named,
-        children=children,
-    )
+def iter_ast_edges(node: Node, named_only: bool) -> Iterator[Tuple[Node, Node]]:
+    """Yield (parent, child) pairs depth-first, without recursion: each child's
+    pair comes right before the pairs of its own subtree."""
+
+    def children(parent: Node) -> List[Node]:
+        return [c for c in parent.children if c.is_named or not named_only]
+
+    stack = [(node, child) for child in reversed(children(node))]
+    while stack:
+        parent, child = stack.pop()
+        yield parent, child
+        stack.extend((child, grandchild) for grandchild in reversed(children(child)))
 
 
 def find_nodes_containing_position(
@@ -84,28 +91,25 @@ def find_nodes_containing_position(
         node: Root AST node to search from
         row: 0-based row number of cursor position
         column: 0-based column number of cursor position
-        results: List to accumulate results (used for recursion)
+        results: List to append results to
 
     Returns:
-        List of AST nodes that contain the cursor position, ordered from root to leaf
+        List of AST nodes that contain the cursor position, in depth-first order
+        from the root
     """
     if results is None:
         results = []
 
-    # Check if position is within this node
-    start_row, start_col = node.start_point
-    end_row, end_col = node.end_point
-
-    # Position is contained if:
-    # - It's after the start point and before the end point
-    if (row > start_row or (row == start_row and column >= start_col)) and (
-        row < end_row or (row == end_row and column <= end_col)
-    ):
-        results.append(node)
-
-        # Recursively check children
-        for child in node.children:
-            find_nodes_containing_position(child, row, column, results)
+    stack = [node]
+    while stack:
+        current = stack.pop()
+        start_row, start_col = current.start_point
+        end_row, end_col = current.end_point
+        if (row > start_row or (row == start_row and column >= start_col)) and (
+            row < end_row or (row == end_row and column <= end_col)
+        ):
+            results.append(current)
+            stack.extend(reversed(current.children))
 
     return results
 
