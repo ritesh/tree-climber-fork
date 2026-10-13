@@ -3,7 +3,7 @@ Control Flow Graph (CFG) Generator Framework using py-tree-sitter for Java langu
 This framework uses the visitor pattern with depth-first traversal to build CFGs.
 """
 
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from tree_sitter import Node
 
@@ -13,7 +13,18 @@ from tree_climber.ast_utils import (
     get_required_child_by_field_name,
     get_source_text,
 )
-from tree_climber.cfg.cfg_types import CFGTraversalResult, NodeType
+from tree_climber.cfg.call_sites import (
+    CallRegions,
+    link_call_flows,
+    preorder,
+    with_span,
+)
+from tree_climber.cfg.cfg_types import (
+    CallArgument,
+    CallSite,
+    CFGTraversalResult,
+    NodeType,
+)
 from tree_climber.cfg.visitor import CFGVisitor
 
 
@@ -49,22 +60,80 @@ class JavaCFGVisitor(CFGVisitor):
         return CFGTraversalResult(entry_node_id=node_id, exit_node_ids=[node_id])
 
     # AST utilities
-    def get_calls(self, ast_node: Node) -> List[str]:
-        """Extract function calls under an AST node."""
+    @staticmethod
+    def _argument_nodes(call: Node) -> List[Node]:
+        arguments = call.child_by_field_name("arguments")
+        if arguments is None:
+            return []
+        return [
+            c
+            for c in arguments.named_children
+            if c.type not in ("line_comment", "block_comment")
+        ]
 
-        def process_call(node: Node) -> Optional[str]:
-            if node.type == "method_invocation":
-                # In Java, method calls are like: obj.method() or method()
-                identifiers = []
-                for child in node.children:
-                    if child.type == "identifier":
-                        identifiers.append(get_source_text(child))
-                if len(identifiers) > 0:
-                    # return ".".join(identifiers) # TODO handle object or package names
-                    return identifiers[-1]
-            return None
+    @staticmethod
+    def _assigned_names(call: Node) -> List[str]:
+        """Variables that receive the call's result when the call is the whole
+        right-hand side: `T x = f();`, `x = f();`, `a = b = f();`, through
+        parentheses and casts. Only plain names, like `get_definitions`."""
+        names: List[str] = []
+        node = call
+        while node.parent is not None:
+            parent = node.parent
+            if parent.type in ("parenthesized_expression", "cast_expression"):
+                pass
+            elif parent.type == "variable_declarator":
+                value = parent.child_by_field_name("value")
+                name = parent.child_by_field_name("name")
+                if value is not None and value.id == node.id and name is not None:
+                    names.append(get_source_text(name))
+                break
+            elif parent.type == "assignment_expression":
+                right = parent.child_by_field_name("right")
+                left = parent.child_by_field_name("left")
+                if right is None or right.id != node.id:
+                    break
+                if left is not None and left.type == "identifier":
+                    names.insert(0, get_source_text(left))
+            else:
+                break
+            node = parent
+        return list(dict.fromkeys(names))
 
-        return dfs(ast_node, process_call)
+    def get_call_sites(self, ast_node: Node) -> List[CallSite]:
+        """Describe every method invocation under an AST node (`new Foo(x)` is not
+        a method invocation and is not recorded)."""
+        pairs: List[Tuple[CallSite, Node]] = []
+        for call in preorder(ast_node):
+            if call.type != "method_invocation":
+                continue
+            name = call.child_by_field_name("name")
+            receiver = call.child_by_field_name("object")
+            callee_text = (
+                call.text[: name.end_byte - call.start_byte].decode("utf-8")
+                if name is not None and call.text is not None
+                else ""
+            )
+            site = CallSite(
+                callee=get_source_text(name) if name is not None else None,
+                callee_text=callee_text,
+                receiver=get_source_text(receiver) if receiver else None,
+                arguments=[
+                    CallArgument(text=get_source_text(a), uses=self.get_uses(a))
+                    for a in self._argument_nodes(call)
+                ],
+                assigned_to=self._assigned_names(call),
+            )
+            pairs.append((with_span(site, call), call))
+        link_call_flows(
+            pairs,
+            lambda call: CallRegions(
+                arguments=self._argument_nodes(call),
+                receiver=call.child_by_field_name("object"),
+            ),
+            frozenset({"lambda_expression"}),
+        )
+        return [site for site, _ in pairs]
 
     def get_definitions(self, ast_node: Node) -> List[str]:
         """Extract variable definitions under an AST node."""

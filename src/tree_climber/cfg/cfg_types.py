@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 from enum import Enum, auto
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from tree_sitter import Node
 
@@ -24,12 +24,95 @@ class NodeType(Enum):
 
 
 @dataclass
+class CallArgument:
+    """One argument of a call.
+
+    `kind` is "positional", "keyword" (`key=value`, with `keyword` set), "star"
+    (`*args`) or "double_star" (`**kwargs`); the last two are Python only.
+    """
+
+    text: str
+    uses: List[str] = field(default_factory=list)
+    keyword: Optional[str] = None
+    kind: str = "positional"
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "text": self.text,
+            "uses": self.uses,
+            "keyword": self.keyword,
+            "kind": self.kind,
+        }
+
+
+@dataclass
+class CallFlow:
+    """Where a call's result goes when it is part of another call.
+
+    `call` is an index into the same node's `call_sites`. `role` is "argument"
+    (with `position` the argument's index), "receiver" (`a.b(c).d()`: `b(c)`
+    feeds `d` as its receiver) or "callee" (`f()()`).
+    """
+
+    call: int
+    role: str
+    position: Optional[int] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {"call": self.call, "role": self.role, "position": self.position}
+
+
+@dataclass
+class CallSite:
+    """One call expression: what was called, with what, and where the result goes.
+
+    `callee` is the name used to link the call to a function definition, or None
+    when the callee has no name we can use (`(*fp)(x)`, `f()()`, `s->cb(x)`);
+    `callee_text` is always the whole callee expression (`os.system`). `receiver`
+    is the text of the object in `obj.f()`. `assigned_to` lists the variables that
+    receive the result when the call is the whole right-hand side of an
+    assignment; `feeds` links a call nested in another call. The span is the
+    whole call expression.
+    """
+
+    callee: Optional[str]
+    callee_text: str
+    receiver: Optional[str] = None
+    arguments: List[CallArgument] = field(default_factory=list)
+    assigned_to: List[str] = field(default_factory=list)
+    feeds: Optional[CallFlow] = None
+    start_byte: int = 0
+    end_byte: int = 0
+    start_point: Tuple[int, int] = (0, 0)
+    end_point: Tuple[int, int] = (0, 0)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "callee": self.callee,
+            "callee_text": self.callee_text,
+            "receiver": self.receiver,
+            "arguments": [argument.to_dict() for argument in self.arguments],
+            "assigned_to": self.assigned_to,
+            "feeds": self.feeds.to_dict() if self.feeds else None,
+            "start_byte": self.start_byte,
+            "end_byte": self.end_byte,
+            "start_point": list(self.start_point),
+            "end_point": list(self.end_point),
+        }
+
+
+@dataclass
 class CFGNodeMetadata:
-    """Metadata for a CFG node, used for debugging and analysis"""
+    """Metadata for a CFG node, used for debugging and analysis
+
+    `function_calls` holds the names of the calls that have one, in the same order
+    as `call_sites`, which describes every call.
+    """
 
     function_calls: List[str] = field(default_factory=list)
     variable_definitions: List[str] = field(default_factory=list)
     variable_uses: List[str] = field(default_factory=list)
+    call_sites: List[CallSite] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert metadata to dictionary for JSON serialization"""
@@ -37,6 +120,7 @@ class CFGNodeMetadata:
             "function_calls": self.function_calls,
             "variable_definitions": self.variable_definitions,
             "variable_uses": self.variable_uses,
+            "call_sites": [site.to_dict() for site in self.call_sites],
         }
 
 

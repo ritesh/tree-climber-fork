@@ -7,6 +7,7 @@ from tree_climber.ast_utils import (
     get_source_text,
 )
 from tree_climber.cfg.cfg_types import (
+    CallSite,
     CFGNode,
     CFGNodeMetadata,
     CFGTraversalResult,
@@ -183,9 +184,19 @@ class CFGVisitor(abc.ABC):
         self.cfg = CFG(self.context)
 
     @abc.abstractmethod
-    def get_calls(self, ast_node: Node) -> List[str]:
-        """Extract function calls under an AST node."""
+    def get_call_sites(self, ast_node: Node) -> List[CallSite]:
+        """Describe every call under an AST node that runs when it executes, in
+        source order (an outer call before the calls inside it)."""
         pass
+
+    def get_calls(self, ast_node: Node) -> List[str]:
+        """Names of the calls under an AST node, derived from its call sites.
+        Calls without a usable name are left out."""
+        return [
+            site.callee
+            for site in self.get_call_sites(ast_node)
+            if site.callee is not None
+        ]
 
     @abc.abstractmethod
     def get_definitions(self, ast_node: Node) -> List[str]:
@@ -204,10 +215,12 @@ class CFGVisitor(abc.ABC):
 
         # Link extra node metadata
         if node.ast_node is not None:
+            call_sites = self.get_call_sites(node.ast_node)
             node.metadata = CFGNodeMetadata(
-                function_calls=self.get_calls(node.ast_node),
+                function_calls=[s.callee for s in call_sites if s.callee is not None],
                 variable_definitions=self.get_definitions(node.ast_node),
                 variable_uses=self.get_uses(node.ast_node),
+                call_sites=call_sites,
             )
 
         return node_id
