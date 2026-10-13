@@ -24,7 +24,9 @@ from tree_climber.cfg.cfg_types import (
     CallArgument,
     CallSite,
     CFGTraversalResult,
+    FunctionInfo,
     NodeType,
+    ParameterInfo,
 )
 from tree_climber.cfg.visitor import CFGVisitor
 
@@ -310,6 +312,20 @@ class CCFGVisitor(CFGVisitor):
             exit_node_ids=last_exits,
         )
 
+    def _declared_local_names(self, body: Node) -> List[str]:
+        """Names declared in a function body, in any block: `int a, *b = p;`."""
+        names: List[str] = []
+        for node in preorder(body):
+            if node.type != "declaration":
+                continue
+            for declarator in node.children_by_field_name("declarator"):
+                if declarator.type == "init_declarator":
+                    declarator = declarator.child_by_field_name("declarator")
+                name = self._declared_identifier(declarator)
+                if name is not None:
+                    names.append(get_source_text(name))
+        return names
+
     def visit_function_definition(self, node: Node) -> CFGTraversalResult:
         """Visit a function definition"""
         # Get components via named fields
@@ -325,6 +341,7 @@ class CCFGVisitor(CFGVisitor):
         function_identifier = get_required_child_by_field_name(declarator, "declarator")
         function_name = get_source_text(function_identifier)
         parameter_list = get_required_child_by_field_name(declarator, "parameters")
+        parameter_infos: List[ParameterInfo] = []
         for param in parameter_list.children:
             match param.type:
                 case "parameter_declaration":
@@ -333,10 +350,14 @@ class CCFGVisitor(CFGVisitor):
                     )
                     if name:
                         parameters.append(get_source_text(name))
+                        parameter_infos.append(ParameterInfo(get_source_text(name)))
                 case _:
                     # Skip punctuation and other non-parameter elements
                     if param.is_named and not param.type == "comment":
                         parameters.append(get_source_text(param))
+                        parameter_infos.append(
+                            ParameterInfo(get_source_text(param), "var_positional")
+                        )
 
         # Find closing brace in body for exit node location
         for child in body_node.children:
@@ -350,7 +371,18 @@ class CCFGVisitor(CFGVisitor):
         entry_id = self.create_node(
             NodeType.ENTRY, source_text=param_info, ast_node=declarator
         )
-        self.cfg.nodes[entry_id].metadata.variable_definitions.extend(parameters)
+        metadata = self.cfg.nodes[entry_id].metadata
+        metadata.variable_definitions.extend(parameters)
+        metadata.function = FunctionInfo(
+            call_name=function_name,
+            parameters=parameter_infos,
+            locals=list(
+                dict.fromkeys(
+                    [p.name for p in parameter_infos if p.kind == "positional"]
+                    + self._declared_local_names(body_node)
+                )
+            ),
+        )
         self.cfg.entry_node_ids.append(entry_id)
         self.context.push_entry(entry_id)
         self.context.register_function_definition(entry_id, function_name)

@@ -23,6 +23,7 @@ from typing import Dict, Iterable, Iterator, List, Optional, Tuple, Union
 from tree_sitter import Node
 
 from tree_climber.ast_utils import get_source_text
+from tree_climber.cfg.cfg_types import ParameterInfo
 
 SEQUENCE_TARGETS = frozenset(
     {
@@ -121,6 +122,69 @@ def is_irrefutable_pattern(pattern: Node) -> bool:
     return False
 
 
+def parameter_infos(parameters: Node) -> List[ParameterInfo]:
+    """The parameters of a `parameters` node with their kinds, in order."""
+    infos: List[ParameterInfo] = []
+    keyword_only = False
+    for parameter in parameters.named_children:
+        name = _parameter_name(parameter)
+        match parameter.type:
+            case "keyword_separator":
+                keyword_only = True
+            case "list_splat_pattern" if name:
+                infos.append(ParameterInfo(name, "var_positional"))
+                keyword_only = True
+            case "dictionary_splat_pattern" if name:
+                infos.append(ParameterInfo(name, "var_keyword"))
+            case _ if name:
+                has_default = parameter.type in (
+                    "default_parameter",
+                    "typed_default_parameter",
+                )
+                kind = "keyword_only" if keyword_only else "positional"
+                infos.append(ParameterInfo(name, kind, has_default))
+    return infos
+
+
+def declared_scope_names(function: Node) -> Tuple[List[str], List[str]]:
+    """The names a function declares `global` and `nonlocal` (not those of the
+    functions and classes nested in it)."""
+    declared: Dict[str, List[str]] = {"global_statement": [], "nonlocal_statement": []}
+    body = function.child_by_field_name("body")
+    stack = [body] if body is not None else []
+    while stack:
+        node = stack.pop()
+        if node.type in declared:
+            declared[node.type].extend(
+                get_source_text(c)
+                for c in node.named_children
+                if c.type == "identifier"
+            )
+            continue
+        if node.type in ("function_definition", "class_definition", "lambda"):
+            continue
+        stack.extend(reversed(node.children))
+    return declared["global_statement"], declared["nonlocal_statement"]
+
+
+def collect_local_names(function: Node) -> List[str]:
+    """The names a function binds itself: its parameters and the names strongly
+    bound in its body (assignment, `for`, `with`, `except`, import, `def`,
+    `class`, walrus, `match` captures). Attribute and subscript writes read
+    their root name, they do not bind it. Names declared `global` or `nonlocal`
+    are not local."""
+    collector = _Collector(strong_only=True)
+    parameters = function.child_by_field_name("parameters")
+    body = function.child_by_field_name("body")
+    names = list(parameter_names(parameters)) if parameters is not None else []
+    if body is not None:
+        collector.run((body, frozenset()))
+    names.extend(collector.bindings.definitions)
+    globals_, nonlocals = declared_scope_names(function)
+    excluded = set(globals_) | set(nonlocals)
+    return [name for name in dict.fromkeys(names) if name not in excluded]
+
+
 def parameter_names(parameters: Node) -> List[str]:
     """Names bound by a `parameters` or `lambda_parameters` node."""
     names = (_parameter_name(parameter) for parameter in parameters.named_children)
@@ -168,9 +232,14 @@ class _Collector:
     resumes, so the order of definitions and uses is the same as a recursive walk.
     """
 
-    def __init__(self, uses_cache: Optional[Dict[int, List[str]]] = None) -> None:
+    def __init__(
+        self,
+        uses_cache: Optional[Dict[int, List[str]]] = None,
+        strong_only: bool = False,
+    ) -> None:
         self.bindings = Bindings()
         self.uses_cache = uses_cache
+        self.strong_only = strong_only
 
     def run(self, *tasks: Task) -> None:
         stack: List[Iterator[Task]] = [iter(tasks)]
@@ -254,7 +323,8 @@ class _Collector:
             return
         if current.type == "identifier":
             name = get_source_text(current)
-            self.define(name)
+            if not self.strong_only:
+                self.define(name)
             self.use(name, local)
         else:
             yield (current, local)
@@ -365,6 +435,12 @@ class _Collector:
         if left is not None:
             yield self.target(left, local)
         yield self.visit_children(node, local, skip=[left])
+
+    def _visit_case_clause(self, node: Node, local: frozenset[str]) -> Iterator[Task]:
+        patterns = [c for c in node.named_children if c.type == "case_pattern"]
+        for pattern in patterns:
+            yield self.pattern(pattern)
+        yield self.visit_children(node, local, skip=patterns)
 
     def _visit_as_pattern(self, node: Node, local: frozenset[str]) -> Iterator[Task]:
         alias = node.child_by_field_name("alias")

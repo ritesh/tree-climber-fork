@@ -19,7 +19,7 @@ A hands-on tour of what Tree Climber does with Python. Every command and every o
 | Lambdas | Stay inside their statement (by design) |
 | Comprehensions, generator expressions | Stay inside their statement; their own variables are local to them |
 | `yield`, `yield from`, `await` | Stay inside their statement and do not end the function |
-| Closures, `global` / `nonlocal` | Not connected across scopes: dataflow does not cross function calls |
+| Closures, `global` / `nonlocal` | Each function's def-use chains stay separate; `analyze_interprocedural` connects them (see [Data flow between functions](#data-flow-between-functions)) |
 
 Python is available from the CLI, the HTTP API, and the web UI (pick it in the language selector; the editor keeps whatever code was in it, so paste Python in).
 
@@ -463,7 +463,7 @@ Names bound in a class body are class attributes, so they are not defined as var
 
 ### Closures and global/nonlocal
 
-Dataflow here does not cross function calls (reaching definitions deliberately ignore `function_call` and `function_return` edges, so a callee's locals cannot overwrite the caller's). The consequence: a nested function's read of an enclosing local, and a `global` or `nonlocal` write, are not connected to the definition in the other scope.
+Def-use chains do not cross function calls (reaching definitions deliberately ignore `function_call` and `function_return` edges, so a callee's locals cannot overwrite the caller's). The consequence: a nested function's read of an enclosing local, and a `global` or `nonlocal` write, are not connected to the definition in the other scope by the chains below. [Data flow between functions](#data-flow-between-functions) adds those connections as separate edges.
 
 ```python
 def outer():
@@ -481,7 +481,7 @@ Def-use chains
   count: count = 0 => return count
 ```
 
-Check: `return count` depends on `count = 0` only; the `count = count + 1` inside `bump` is not linked to either. This is a known limitation of the framework (it applies to C globals too), not specific to Python.
+Check: `return count` depends on `count = 0` only; the `count = count + 1` inside `bump` is not linked to either by the def-use chains. The interprocedural analysis does link them as free-variable flows.
 
 ### Still inline: lambdas, comprehensions, yield and await
 
@@ -577,6 +577,75 @@ Check:
 - `assigned_to` is set only when the call is the whole right-hand side of the assignment (`x = f()`, `a, b = f()`, `x = y = f()`, `x += f()`, `with f() as h`, `(x := f())`); in `cmd = "ls " + input()` the call is just an operand, so `assigned_to` is empty and the node's definitions and uses carry that flow;
 - a call without a usable name (`f()(x)`, `handlers[k](x)`) is still a site, with `callee=None`, and is left out of `function_calls`;
 - the same structure exists for C and Java: `s->cb(x)` and `(*fp)(x)` in C are sites with no name; Java `new Foo(x)` is not a call site yet.
+
+### Data flow between functions
+
+`analyze_interprocedural(cfg)` (in `tree_climber.dataflow.interprocedural`) adds the flow that the solver deliberately does not follow. It returns three lists of edges between the existing def-use islands and changes nothing else:
+
+- `argument_flows`: an argument of a call site flows into a parameter of a function it may call;
+- `return_flows`: a `return` node flows into a call site that may call that function;
+- `free_variable_flows`: a definition of a closure, `global` or `nonlocal` variable flows into a use of it in another function.
+
+```python
+LIMIT = 10
+
+def outer():
+    count = 0
+    def bump():
+        nonlocal count
+        count = count + 1
+    def peek():
+        return count + LIMIT
+    bump()
+    return peek()
+```
+
+```
+return    'return count + LIMIT' -> 'return peek()' site 0
+free      LIMIT: 'LIMIT = 10' -> 'return count + LIMIT' (global)
+free      count: 'count = 0' -> 'count = count + 1' (closure)
+free      count: 'count = 0' -> 'return count + LIMIT' (closure)
+free      count: 'count = count + 1' -> 'return count + LIMIT' (closure)
+```
+
+```python
+class Runner:
+    def __init__(self, shell):
+        self.shell = shell
+
+    def go(self, cmd, check=True):
+        return run(cmd)
+
+def run(cmd):
+    return cmd
+
+def read():
+    return input()
+
+def handler():
+    y = read()
+    Runner(True).go(y, check=False)
+```
+
+```
+argument  'return run(cmd)' site 0 argument 0 -> run parameter cmd
+argument  'Runner(True).go(y, check=False)' site 0 receiver -> go parameter self
+argument  'Runner(True).go(y, check=False)' site 0 argument 0 -> go parameter cmd
+argument  'Runner(True).go(y, check=False)' site 0 argument 1 -> go parameter check
+argument  'Runner(True).go(y, check=False)' site 1 argument 0 -> Runner parameter shell
+return    'return cmd' -> 'return run(cmd)' site 0
+return    'return input()' -> 'y = read()' site 0
+return    'return run(cmd)' -> 'Runner(True).go(y, check=False)' site 0
+```
+
+Check:
+- endpoints are call sites (node id plus index into `call_sites`), not variables: to follow a value, combine these edges with the def-use chains in each function (`y = read()` receives the return of `read`; `y` is then used by the `.go(y, ...)` site, whose argument 0 reaches `go`'s parameter `cmd`, then `run`'s `cmd`, then back out through the returns);
+- argument index -1 is the receiver, bound to `self`; for a constructor call (`Runner(True)`, registered as `Runner`) the arguments bind to `__init__` after `self`, and its return is not flowed to the call;
+- arguments bind as Python binds them: positional by position, keywords by name, `*args` to every positional parameter from the current position on and to `*rest`, `**kwargs` to every named parameter not already bound and to `**rest`, unmatched extras to `*rest` / `**rest`;
+- calls are resolved by name, as for the `function_call` edges: a call reaches every function with that name, so a name shared by two functions gives edges to both (a sound over-approximation);
+- free variables are flow-insensitive: every definition in a scope reaches every use of it in another function, with no ordering between them (`count = count + 1` and `return count + LIMIT` above are both linked even though `bump()` may run first or never);
+- scoping follows Python: locals shadow, `global` and `nonlocal` redirect, class bodies are not scopes, and a name that nothing declares locally is global; in C, any name not declared inside the function is global; Java free variables are not modeled, but Java arguments and returns are;
+- `to_dict()` on the result gives the same lists as JSON-friendly dicts.
 
 ## 4. HTTP API
 

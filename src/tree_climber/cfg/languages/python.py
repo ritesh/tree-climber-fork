@@ -29,7 +29,12 @@ from tree_climber.ast_utils import (
     get_required_child_by_field_name,
     get_source_text,
 )
-from tree_climber.cfg.cfg_types import CallSite, CFGTraversalResult, NodeType
+from tree_climber.cfg.cfg_types import (
+    CallSite,
+    CFGTraversalResult,
+    FunctionInfo,
+    NodeType,
+)
 from tree_climber.cfg.languages.python_calls import (
     call_nodes,
     call_sites,
@@ -38,8 +43,11 @@ from tree_climber.cfg.languages.python_calls import (
 from tree_climber.cfg.languages.python_bindings import (
     collect_bindings,
     collect_for_header_bindings,
+    collect_local_names,
     collect_pattern_bindings,
+    declared_scope_names,
     is_irrefutable_pattern,
+    parameter_infos,
     parameter_names,
 )
 from tree_climber.cfg.visitor import CFGVisitor
@@ -315,6 +323,9 @@ class PythonCFGVisitor(CFGVisitor):
             )
 
         entry_id = self.create_node(NodeType.ENTRY, source_text=self.MODULE_NAME)
+        self.cfg.nodes[entry_id].metadata.function = FunctionInfo(
+            call_name=self.MODULE_NAME, kind="module"
+        )
         exit_id = self.create_node(NodeType.EXIT, source_text=self.MODULE_NAME)
         self.cfg.entry_node_ids.append(entry_id)
         self.cfg.exit_node_ids.append(exit_id)
@@ -399,6 +410,40 @@ class PythonCFGVisitor(CFGVisitor):
                         definition, f"{qualifier}.{get_source_text(nested_name)}"
                     )
 
+    def _function_info(
+        self,
+        node: Node,
+        parameters: Node,
+        function_name: str,
+        qualifier: Optional[str],
+    ) -> FunctionInfo:
+        is_method = qualifier is not None
+        decorators = (
+            [get_source_text(d) for d in node.parent.children if d.type == "decorator"]
+            if node.parent is not None and node.parent.type == "decorated_definition"
+            else []
+        )
+        infos = parameter_infos(parameters)
+        is_constructor = is_method and function_name == "__init__"
+        globals_, nonlocals = declared_scope_names(node)
+        return FunctionInfo(
+            call_name=qualifier.rsplit(".", 1)[-1]
+            if is_constructor and qualifier
+            else function_name,
+            parameters=infos,
+            kind="method" if is_method else "function",
+            binds_receiver=is_method
+            and bool(infos)
+            and "@staticmethod" not in decorators,
+            is_constructor=is_constructor,
+            parent=self.context.entry_node_ids[-1]
+            if self.context.entry_node_ids
+            else None,
+            locals=collect_local_names(node),
+            globals=globals_,
+            nonlocals=nonlocals,
+        )
+
     def _visit_function(
         self, node: Node, qualifier: Optional[str] = None
     ) -> CFGTraversalResult:
@@ -423,8 +468,10 @@ class PythonCFGVisitor(CFGVisitor):
             entry_id = self.create_node(
                 NodeType.ENTRY, ast_node=name_node, source_text=display_name
             )
-            self.cfg.nodes[entry_id].metadata.variable_definitions.extend(
-                parameter_names(parameters)
+            metadata = self.cfg.nodes[entry_id].metadata
+            metadata.variable_definitions.extend(parameter_names(parameters))
+            metadata.function = self._function_info(
+                node, parameters, function_name, qualifier
             )
             self.cfg.entry_node_ids.append(entry_id)
             self.context.push_entry(entry_id)

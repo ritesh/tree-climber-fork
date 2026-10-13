@@ -12,7 +12,7 @@ Tree Climber is a comprehensive static analysis framework for generating Control
 
 - **C**: CFG generation with control structures, loops, and functions
 - **Java**: CFG generation for Java language constructs
-- **Python**: Module-level code and functions, `if`/`while`/`for` (with `break`, `continue`, and loop `else`), `match`, `try`/`except`/`finally`, `raise`, `with`, nested functions, classes and methods, and decorators. Lambdas, comprehensions, `yield` and `await` stay inside their statement, and closures are not connected across scopes. See the [Python guide](./docs/python-guide.md).
+- **Python**: Module-level code and functions, `if`/`while`/`for` (with `break`, `continue`, and loop `else`), `match`, `try`/`except`/`finally`, `raise`, `with`, nested functions, classes and methods, and decorators. Lambdas, comprehensions, `yield` and `await` stay inside their statement, and closures are connected across scopes by the interprocedural analysis (arguments, returns and free variables). See the [Python guide](./docs/python-guide.md).
 - **Extensible**: Framework designed to easily add new language support
 
 Run `tree-climber --list-languages` to see what your install supports.
