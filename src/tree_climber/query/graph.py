@@ -23,7 +23,13 @@ from tree_climber.dataflow.analyses.reaching_definitions import (
 )
 from tree_climber.dataflow.analyses.use_def import UseDefResult, UseDefSolver
 from tree_climber.dataflow.solver import RoundRobinSolver
-from tree_climber.query.edges import CALL_KINDS, DEF_USE, FLOW, DataFlowEdge
+from tree_climber.query.edges import (
+    CALL_KINDS,
+    DEF_USE,
+    FLOW,
+    DataFlowEdge,
+    interprocedural_edges,
+)
 from tree_climber.query.facts import FactGraph, Route
 from tree_climber.query.path import Path, PathStep
 
@@ -395,6 +401,15 @@ class CodeGraph:
                     self._id(edge.source)
                 )
         return {node_id: sorted(defs) for node_id, defs in sorted(result.items())}
+
+    @cached_property
+    def _interprocedural(self) -> List[DataFlowEdge]:
+        return interprocedural_edges(self.cfg)
+
+    def interprocedural_edges(self) -> List[DataFlowEdge]:
+        """Argument, return and free-variable flows between functions, to pass as
+        `extra_edges` so the data-flow queries cross calls."""
+        return list(self._interprocedural)
 
     def data_flow_edges(self, extra_edges: ExtraEdges = None) -> List[DataFlowEdge]:
         """Every def-use edge, then the extra edges, without repeats."""

@@ -646,6 +646,7 @@ Check:
 - free variables are flow-insensitive: every definition in a scope reaches every use of it in another function, with no ordering between them (`count = count + 1` and `return count + LIMIT` above are both linked even though `bump()` may run first or never);
 - scoping follows Python: locals shadow, `global` and `nonlocal` redirect, class bodies are not scopes, and a name that nothing declares locally is global; in C, any name not declared inside the function is global; Java free variables are not modeled, but Java arguments and returns are;
 - `to_dict()` on the result gives the same lists as JSON-friendly dicts.
+- for the query API, `CodeGraph.interprocedural_edges()` gives the same flows as `DataFlowEdge`s (see [Edges from other analyses](#edges-from-other-analyses)).
 
 ### Querying the graph
 
@@ -822,6 +823,27 @@ print(graph.data_flow_path(req, build_ret, extra_edges=edges))
   --def_use text--> [11] return "ls " + text
 ```
 
+`graph.interprocedural_edges()` produces these edges from the interprocedural analysis (see [Data flow between functions](#data-flow-between-functions)), so they need not be written by hand. An argument flows from each variable it reads to the parameter (`argument`); a return flows from the whole `return` node to the variables the call is assigned to, or to a placeholder `<call k>` for call site `k` of the node when the result is not assigned (`return`); a closure or global flows from its definition to its use (`free_variable`):
+
+```python
+edges = graph.interprocedural_edges()
+# [DataFlowEdge(3, 'name', 9, 'text', 'argument'),
+#  DataFlowEdge(8, 'cmd', 12, 'value', 'argument'),
+#  DataFlowEdge(11, '<return>', 3, 'cmd', 'return'),
+#  DataFlowEdge(14, '<return>', 8, '<call 0>', 'return')]
+print(graph.data_flow_path(req, graph.by_text("return value")[0], extra_edges=edges))
+```
+
+```
+[2] name = request.args.get("name")
+  --def_use name--> [3] cmd = build(name)
+  --def_use cmd--> [8] return finish(cmd)
+  --argument value--> [12] ENTRY finish
+  --def_use value--> [14] return value
+```
+
+A nested call is an argument too: in `g(read())`, a return into `read()` flows on to `g`'s parameter from `<call 1>`. The receiver of `obj.m()` flows into `self` from the variables the receiver reads.
+
 An edge leaves the facts named `source_variable` at the source node and arrives at `target_variable` at the target (a definition if the node defines it, a use if it uses it). A variable that the node neither defines nor uses, such as a name for "the return value", applies to the whole node; a node with no variables at all (`return 1`) gets one for the edge, so the edge is still followed and the node can start a path or a slice. Unknown node ids raise `KeyError`.
 
 #### A taint tracker in a few lines
@@ -869,7 +891,7 @@ data = input() -> cmd = "ls " + data -> eval(cmd)
 Check, and what is approximate:
 - the data-flow model is statement-level, like the def-use chains: every variable a statement uses flows into every variable it defines (`cmd = build(name)` makes `cmd` depend on `build` as well as `name`). Extra edges are the exception: they follow the variable they name;
 - flow queries follow call and return edges like any other edge, and a path need not return to the call site it entered from. Pass `exclude=CALL_KINDS` to stay inside one function. Calls are linked by name, so `obj.f()` reaches every function named `f`;
-- slices and data-flow paths do not cross calls unless you pass `extra_edges`; they have no control dependence (nodes that only decide whether another runs are not included);
+- slices and data-flow paths do not cross calls unless you pass `extra_edges` (`graph.interprocedural_edges()` for all calls in the file); they have no control dependence (nodes that only decide whether another runs are not included);
 - a weak update (`d["k"] = v`, `obj.f = v`) defines and uses the root name, so a path continues through it, as in the def-use chains;
 - `paths` and `data_flow_paths` are depth first, cut off at `max_paths`, and `shortest_path` breaks ties toward lower node ids; none of them knows whether a path is feasible.
 
