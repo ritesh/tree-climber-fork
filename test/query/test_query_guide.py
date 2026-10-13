@@ -169,3 +169,25 @@ def run(flag):
         "data = input() -> system(data)",
         'data = input() -> cmd = "ls " + data -> eval(cmd)',
     ]
+
+
+def test_interprocedural_edges(graph):
+    req = graph.by_text("name =")[0]
+    edges = graph.interprocedural_edges()
+
+    assert edges == [
+        DataFlowEdge(3, "name", 9, "text", "argument"),
+        DataFlowEdge(8, "cmd", 12, "value", "argument"),
+        DataFlowEdge(11, "<return>", 3, "cmd", "return"),
+        DataFlowEdge(14, "<return>", 8, "<call 0>", "return"),
+    ]
+    path = graph.data_flow_path(
+        req, graph.by_text("return value")[0], extra_edges=edges
+    )
+    assert str(path) == (
+        '[2] name = request.args.get("name")\n'
+        "  --def_use name--> [3] cmd = build(name)\n"
+        "  --def_use cmd--> [8] return finish(cmd)\n"
+        "  --argument value--> [12] ENTRY finish\n"
+        "  --def_use value--> [14] return value"
+    )

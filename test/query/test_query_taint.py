@@ -145,6 +145,15 @@ def test_flow_is_not_followed_across_calls():
     assert tracked(CASES["not_across_calls"]) == set()
 
 
+def test_flow_across_calls_is_found_with_interprocedural_edges():
+    graph = CodeGraph.from_source("python", CASES["not_across_calls"])
+    source, sink = graph.calling("input")[0], graph.calling("system")[0]
+
+    path = graph.data_flow_path(source, sink, extra_edges=graph.interprocedural_edges())
+    assert path is not None
+    assert path.texts == ["x = input()", "g(x)", "g", "system(p)"]
+
+
 def test_loop_carried_flow_is_found():
     graph = CodeGraph.from_source("python", CASES["loop"])
     source, sink = graph.calling("input")[0], graph.calling("eval")[0]
