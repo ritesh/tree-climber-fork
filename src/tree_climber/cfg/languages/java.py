@@ -23,7 +23,9 @@ from tree_climber.cfg.cfg_types import (
     CallArgument,
     CallSite,
     CFGTraversalResult,
+    FunctionInfo,
     NodeType,
+    ParameterInfo,
 )
 from tree_climber.cfg.visitor import CFGVisitor
 
@@ -286,11 +288,27 @@ class JavaCFGVisitor(CFGVisitor):
 
         # Extract parameters list
         param_list = []
+        parameter_infos: List[ParameterInfo] = []
         if parameters:
             for param in parameters.children:
                 if param.type == "formal_parameter":
                     param_identifier = get_required_child_by_field_name(param, "name")
                     param_list.append(get_source_text(param_identifier))
+                    parameter_infos.append(
+                        ParameterInfo(get_source_text(param_identifier))
+                    )
+                elif param.type == "spread_parameter":
+                    declarator = next(
+                        (c for c in param.children if c.type == "variable_declarator"),
+                        None,
+                    )
+                    name = (
+                        declarator.child_by_field_name("name") if declarator else None
+                    )
+                    if name is not None:
+                        parameter_infos.append(
+                            ParameterInfo(get_source_text(name), "var_positional")
+                        )
 
         # Find closing brace in body for exit node location
         closing_brace = None
@@ -304,7 +322,11 @@ class JavaCFGVisitor(CFGVisitor):
         entry_id = self.create_node(
             NodeType.ENTRY, source_text=method_name, ast_node=identifier
         )
-        self.cfg.nodes[entry_id].metadata.variable_definitions.extend(param_list)
+        metadata = self.cfg.nodes[entry_id].metadata
+        metadata.variable_definitions.extend(param_list)
+        metadata.function = FunctionInfo(
+            call_name=method_name, parameters=parameter_infos
+        )
         self.cfg.entry_node_ids.append(entry_id)
         self.context.push_entry(entry_id)
         self.context.register_function_definition(entry_id, method_name)
