@@ -621,7 +621,7 @@ graph.function_of(graph.calling("system")[0]).source_text   # 'handler'
 [n.id for n in graph.function_nodes("build")]         # [9, 10, 11]
 ```
 
-`calling` matches the callee name and the whole callee expression, and takes several names (any of them). `by_text` takes a substring, `exact=True`, or a compiled regex. A function is identified by its `ENTRY` node; `function_of` and `function_nodes` use the rule that a function is what is reachable from its entry without following call edges.
+`calling` matches the callee name and the whole callee expression, and takes several names (any of them). `by_text` takes a substring, `exact=True`, or a compiled regex. A function is identified by its `ENTRY` node (`function_nodes` given any other node raises `ValueError`); `function_of` and `function_nodes` use the rule that a function is what is reachable from its entry without following call edges.
 
 #### Flow queries
 
@@ -714,7 +714,7 @@ print(graph.data_flow_path(graph.by_text('cmd = "true"')[0], sink))
 None
 ```
 
-`data_flow_paths` lists them all, with the same `max_paths` / `max_length` bounds.
+`data_flow_paths` lists them all, with the same `max_paths` / `max_length` bounds. Neither returns a path that comes back to its source node.
 
 #### Paths as data
 
@@ -753,7 +753,7 @@ print(graph.data_flow_path(req, build_ret, extra_edges=edges))
   --def_use text--> [11] return "ls " + text
 ```
 
-An edge leaves the facts named `source_variable` at the source node and arrives at `target_variable` at the target (a definition if the node defines it, a use if it uses it). A variable that the node neither defines nor uses, such as a name for "the return value", applies to the whole node. Unknown node ids raise `KeyError`.
+An edge leaves the facts named `source_variable` at the source node and arrives at `target_variable` at the target (a definition if the node defines it, a use if it uses it). A variable that the node neither defines nor uses, such as a name for "the return value", applies to the whole node; a node with no variables at all (`return 1`) gets one for the edge, so the edge is still followed and the node can start a path or a slice. Unknown node ids raise `KeyError`.
 
 #### A taint tracker in a few lines
 

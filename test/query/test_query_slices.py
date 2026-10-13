@@ -525,3 +525,70 @@ def test_a_node_without_variables_starts_no_data_flow_path(language):
     assert graph.data_flow_paths(entry, found["out"]) == []
     assert graph.data_flow_path(found["src"], entry) is None
     assert graph.data_flow_paths(found["src"], entry) == []
+
+
+def test_a_target_behind_an_avoided_node_is_answered_without_enumerating_data_flow():
+    lines = ["a0 = input()", "b0 = input()"]
+    for index in range(1, 26):
+        previous = f"a{index - 1} + b{index - 1}"
+        lines += [f"a{index} = {previous}", f"b{index} = {previous}"]
+    lines += ["z = a25", "w = z"]
+    graph = CodeGraph.from_source("python", "\n".join(lines) + "\n")
+    start, gate = graph.by_text("a0 = input()")[0], graph.by_text("z = a25")[0]
+    end = graph.by_text("w = z")[0]
+
+    assert graph.data_flow_path(start, end, avoid=[gate]) is None
+    assert graph.data_flow_paths(start, end, avoid=[gate]) == []
+    assert len(graph.data_flow_paths(start, end, max_paths=3)) == 3
+
+
+@LANGUAGES
+def test_extra_edges_from_a_node_without_variables(language):
+    graph = build(language)
+    found = roles(graph)
+    edge = DataFlowEdge(
+        found["main_entry"].id, "<arg>", found["helper_entry"].id, "n", "argument"
+    )
+
+    path = graph.data_flow_path(
+        found["main_entry"], found["helper_ret"], extra_edges=[edge]
+    )
+    assert path is not None
+    assert path.nodes == ids(graph, "main_entry", "helper_entry", "helper_ret")
+    assert named(
+        graph, graph.forward_slice(found["main_entry"], extra_edges=[edge])
+    ) == ["helper_entry", "helper_ret", "main_entry"]
+    assert found["main_entry"] in graph.backward_slice(
+        found["helper_ret"], extra_edges=[edge]
+    )
+    assert graph.data_flow_path(found["main_entry"], found["helper_ret"]) is None
+
+
+def test_extra_edges_are_reused_for_the_same_edges():
+    graph = build("python")
+    argument, result = call_edges(graph)
+    found = roles(graph)
+
+    first = graph._fact_graph([argument, result])
+    assert graph._fact_graph((argument, result)) is first
+    assert graph._fact_graph([argument]) is not first
+    assert graph._fact_graph([]) is graph._fact_graph(None)
+    src, callee = found["src"], found["helper_ret"]
+    assert graph.data_flow_path(src, callee, extra_edges=[argument]) is not None
+    assert graph.data_flow_path(src, callee, extra_edges=[result]) is None
+    assert graph.data_flow_path(src, callee) is None
+    assert graph.data_flow_path(src, callee, extra_edges=[argument]) is not None
+
+
+def test_data_flow_path_and_paths_agree_on_returning_to_the_source():
+    source = (
+        "def f(a, c):\n    while c:\n        x, w = a, a\n        a = x\n    print(w)\n"
+    )
+    graph = CodeGraph.from_source("python", source)
+    start, end = graph.by_text("x, w = a, a")[0], graph.by_text("print(w)")[0]
+
+    assert graph.data_flow_path(start, end, variable="x") is None
+    assert graph.data_flow_paths(start, end, variable="x") == []
+    path = graph.data_flow_path(start, end)
+    assert path is not None and path.nodes == [start.id, end.id]
+    assert [p.nodes for p in graph.data_flow_paths(start, end)] == [path.nodes]

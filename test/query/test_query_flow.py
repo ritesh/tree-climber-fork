@@ -479,3 +479,13 @@ def test_an_unreachable_target_is_answered_without_enumerating_paths():
 
     assert graph.paths(entry, unreachable) == []
     assert graph.shortest_path(entry, unreachable) is None
+
+
+def test_a_target_behind_an_avoided_node_is_answered_without_enumerating_paths():
+    graph = CodeGraph.from_source("python", chain_of_diamonds(25))
+    entry = graph.functions()[0]
+    exit_node = graph.by_type("EXIT")[0]
+    last = graph.by_text("return a")[0]
+
+    assert graph.paths(entry, exit_node, avoid=[last]) == []
+    assert graph.shortest_path(entry, exit_node, avoid=[last]) is None

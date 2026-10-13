@@ -44,6 +44,7 @@ class CodeGraph:
 
     def __init__(self, cfg: CFG):
         self.cfg = cfg
+        self._last_extras: Optional[Tuple[Tuple[DataFlowEdge, ...], FactGraph]] = None
         self._function_entry: Dict[int, int] = {}
         for entry in cfg.entry_node_ids:
             for node_id in self._within_function(entry):
@@ -147,7 +148,10 @@ class CodeGraph:
                 if self.cfg.nodes[entry].source_text == function
             }
         else:
-            entries = {self._id(function)}
+            entry = self._id(function)
+            if entry not in self.cfg.entry_node_ids:
+                raise ValueError(f"Node {entry} is not an ENTRY node")
+            entries = {entry}
         return self._sorted(
             node_id
             for node_id, entry in self._function_entry.items()
@@ -220,6 +224,18 @@ class CodeGraph:
                     stack.append(node_id)
         return self._sorted(seen)
 
+    def _reaching_without(
+        self, goal: int, labels: Kinds, exclude: Kinds, blocked: Set[int]
+    ) -> Set[int]:
+        seen = {goal}
+        stack = [goal]
+        while stack:
+            for node_id in self._steps(stack.pop(), labels, exclude, backward=True):
+                if node_id not in seen and node_id not in blocked:
+                    seen.add(node_id)
+                    stack.append(node_id)
+        return seen
+
     def can_reach(
         self,
         source: NodeRef,
@@ -288,11 +304,7 @@ class CodeGraph:
         if start == goal:
             return [self._control_path([start])]
         blocked = {self._id(ref) for ref in avoid} - {start, goal}
-        useful = {
-            node.id
-            for node in self.reachable(goal, labels, exclude, backward=True)
-            if node.id not in blocked
-        }
+        useful = self._reaching_without(goal, labels, exclude, blocked)
         found: List[Path] = []
         route = [start]
         stack = [iter(self._steps(start, labels, exclude))]
@@ -336,7 +348,9 @@ class CodeGraph:
         extras = tuple(extra_edges or ())
         if not extras:
             return self._base_facts
-        return self._build_facts(extras)
+        if self._last_extras is None or self._last_extras[0] != extras:
+            self._last_extras = (extras, self._build_facts(extras))
+        return self._last_extras[1]
 
     @cached_property
     def _base_facts(self) -> FactGraph:
@@ -447,7 +461,7 @@ class CodeGraph:
         """A data-flow path from source to target with the fewest steps between
         nodes, or None. Each step's edge is `def_use` (or the kind of an extra
         edge) and carries the variable. `avoid` nodes may not appear between
-        the ends."""
+        the ends, and the path does not come back to the source."""
         graph = self._fact_graph(extra_edges)
         start, goal = self._id(source), self._id(target)
         seeds = graph.seeds(start, variable)
@@ -476,9 +490,10 @@ class CodeGraph:
         if start == goal:
             return [self._route_path(start, [])]
         blocked = {self._id(ref) for ref in avoid} - {start, goal}
+        useful = graph.reaching_nodes(goal, blocked)
         found: List[Path] = []
         for seed in seeds:
-            for route in graph.routes(seed, goal, max_length, blocked):
+            for route in graph.routes(seed, goal, useful, max_length, blocked):
                 path = self._route_path(start, route)
                 if path not in found:
                     found.append(path)

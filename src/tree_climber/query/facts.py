@@ -97,6 +97,9 @@ class FactGraph:
             leaving = [
                 fact for fact in at_source if fact.variable == edge.source_variable
             ]
+            if not at_source:
+                leaving = [Fact(edge.source, edge.source_variable, True)]
+                at_source.update(leaving)
             for source in sorted(leaving or at_source):
                 for target in arrival:
                     self._add(source, Move(target, edge.kind, edge.target_variable))
@@ -166,6 +169,8 @@ class FactGraph:
             if fact.node in avoid and fact.node != source:
                 continue
             for move in self.forward.get(fact, ()):
+                if move.kind is not None and move.target.node == source:
+                    continue
                 step = 0 if move.kind is None else 1
                 new_cost = cost[fact] + step
                 if move.target not in cost or new_cost < cost[move.target]:
@@ -177,15 +182,29 @@ class FactGraph:
                         queue.appendleft(move.target)
         return None
 
+    def reaching_nodes(self, target: int, avoid: Collection[int] = ()) -> Set[int]:
+        """The nodes with a fact that reaches the target without passing through
+        an avoided node."""
+        seen: Set[Fact] = set(self.at_node[target])
+        stack = list(seen)
+        while stack:
+            for move in self.backward.get(stack.pop(), ()):
+                origin = move.target
+                if origin not in seen and origin.node not in avoid:
+                    seen.add(origin)
+                    stack.append(origin)
+        return {fact.node for fact in seen}
+
     def routes(
         self,
         seed: Fact,
         target: int,
+        useful: Collection[int],
         max_length: Optional[int] = None,
         avoid: Collection[int] = (),
     ) -> Iterator[Route]:
-        """Routes from a seed to the target that visit no node twice, depth first."""
-        useful = {fact.node for fact in self.reach(self.at_node[target], self.backward)}
+        """Routes from a seed to the target that visit no node twice, depth first,
+        through `useful` nodes only."""
         on_path = {seed.node}
         route: Route = []
         hops = 0

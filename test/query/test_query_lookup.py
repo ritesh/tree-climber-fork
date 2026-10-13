@@ -185,6 +185,8 @@ def test_function_nodes_by_name_and_by_entry(language):
     assert len(main) == 12
     assert set(node.id for node in main).isdisjoint(node.id for node in helper)
     assert graph.function_nodes("nobody") == []
+    with pytest.raises(ValueError):
+        graph.function_nodes(found["helper_ret"])
 
 
 def test_dead_code_belongs_to_no_function():
