@@ -20,6 +20,7 @@ A hands-on tour of what Tree Climber does with Python. Every command and every o
 | Comprehensions, generator expressions | Stay inside their statement; their own variables are local to them |
 | `yield`, `yield from`, `await` | Stay inside their statement and do not end the function |
 | Closures, `global` / `nonlocal` | Each function's def-use chains stay separate; `analyze_interprocedural` connects them (see [Data flow between functions](#data-flow-between-functions)) |
+| Taint analysis | `tree_climber.taint`: sources, sinks with argument positions, call-site sanitizers, across calls (see [Taint analysis](#taint-analysis)) |
 
 Python is available from the CLI, the HTTP API, and the web UI (pick it in the language selector; the editor keeps whatever code was in it, so paste Python in).
 
@@ -848,7 +849,7 @@ An edge leaves the facts named `source_variable` at the source node and arrives 
 
 #### A taint tracker in a few lines
 
-The prototype in the taint epic (#44) was 40 lines of traversal over `cfg.nodes` and def-use chains. With the query layer it is a path search that avoids the sanitizers:
+The prototype in the taint epic (#44) was 40 lines of traversal over `cfg.nodes` and def-use chains. With the query layer it is a path search that avoids the sanitizers (the full analysis, with call-site sanitizers and argument positions, is [Taint analysis](#taint-analysis)):
 
 ```python
 SOURCES = {"input", "getenv"}
@@ -894,6 +895,97 @@ Check, and what is approximate:
 - slices and data-flow paths do not cross calls unless you pass `extra_edges` (`graph.interprocedural_edges()` for all calls in the file); they have no control dependence (nodes that only decide whether another runs are not included);
 - a weak update (`d["k"] = v`, `obj.f = v`) defines and uses the root name, so a path continues through it, as in the def-use chains;
 - `paths` and `data_flow_paths` are depth first, cut off at `max_paths`, and `shortest_path` breaks ties toward lower node ids; none of them knows whether a path is feasible.
+
+### Taint analysis
+
+`tree_climber.taint` is the analysis the query-layer tracker above sketches, at the level of call sites: a sanitizer cleans the value it returns, not the whole statement (`eval(escape(x))` and `cmd = "ls " + escape(x)` are clean), a sink watches particular arguments, sources can be calls, parameters or attributes, and taint follows calls into functions and back. It works for Python, C and Java.
+
+```python
+from tree_climber.taint import analyze_source, builtin_rules
+
+APP = '''
+import os
+import shlex
+from flask import request
+
+
+def ping():
+    host = request.args.get("host")
+    run("ping -c 1 " + host)
+    run("ping -c 1 " + shlex.quote(host))
+
+
+def run(command):
+    os.system(command)
+
+
+def search(cursor):
+    term = request.args["q"]
+    cursor.execute("SELECT * FROM t WHERE name = ?", (term,))
+    cursor.execute("SELECT * FROM t WHERE name = '" + term + "'")
+'''
+for finding in analyze_source("python", APP.lstrip(), builtin_rules("python")):
+    print(finding)
+```
+
+```
+python-command-injection: argument 0 of os.system
+[7] host = request.args.get("host")
+  --def_use host--> [8] run("ping -c 1 " + host)
+  --argument command--> [10] ENTRY run
+  --def_use command--> [12] os.system(command)
+
+python-sql-injection: argument 0 of cursor.execute
+[15] term = request.args["q"]
+  --def_use term--> [17] cursor.execute("SELECT * FROM t WHERE name = '" + term + ...
+```
+
+The parameterized query is not reported: its second argument is not watched. `builtin_rules(language)` returns example rule sets (command injection, `eval`/`exec`, SQL text, and C format strings); they are starting points, not complete lists for any framework.
+
+Rules can be written in Python (`Rule`, `Source`, `Sink`, `Sanitizer`), as a dict, or as JSON (`RuleSet.from_json`, `RuleSet.load(path)`; for YAML, parse it yourself and pass the dict to `RuleSet.from_dict`):
+
+```json
+{"rules": [{
+  "id": "eval",
+  "languages": ["python"],
+  "sources": [{"call": "input"}, {"parameter": "expr", "function": "calc*"}],
+  "sinks": [{"call": "eval", "arguments": [0]}],
+  "sanitizers": [{"call": "ast.literal_eval"}]
+}]}
+```
+
+- a call pattern is a glob matched against the whole callee: `eval` is a plain `eval(...)` call, `os.system` the function through its module, `*.execute` a method of any object;
+- sources: `call` (the call's result), `parameter` (a name or position) of the functions matching `function`, or `attribute` (`request.args`, `request.*`; matched in the code, not in strings or comments, and not where the statement writes to it);
+- sinks: `arguments` lists positional indexes and keyword names (`[0, "sql"]`); without it, every argument is watched; a `*args` argument counts as any position; the object a method is called on is not an argument;
+- sanitizers: the call's result is clean, whatever it was given.
+
+On
+
+```python
+import ast
+
+
+def calculate(expr):
+    return eval(expr)
+
+
+x = input()
+eval(ast.literal_eval(x))
+eval("1 + 1", {"x": x})
+```
+
+the rule above reports one finding, from the parameter: `calculate -> return eval(expr)`. A finding has `rule`, `source` and `sink` node ids, `sink_call`, `argument` and `path` (a query `Path`), and `to_dict()` for JSON.
+
+How taint moves:
+- inside a statement, call results are worked out innermost first: a source call is tainted, a sanitizer is clean, a call to a function defined in the file is tainted when one of its `return`s is, and any other call passes on the taint of its arguments and receiver (`x.strip()`, `clean(x)`);
+- a variable a call is assigned to takes the call's taint; other definitions take the statement's (a tainted variable read outside any call, or a tainted call that is not inside another); a weak update (`d["k"] = ...`, `x += ...`) keeps the earlier taint;
+- between statements, def-use chains (so a reassignment on every path kills the taint) and the flows of [Data flow between functions](#data-flow-between-functions): arguments into parameters, returns into callers, closures and globals;
+- each source occurrence is followed on its own, so each finding has one source; a sink argument reached from one source by several paths is one finding, with the first path found.
+
+Check, and what is approximate:
+- over-approximations: unknown calls pass taint through; a container or object is one value (`d["k"] = tainted` taints `d`, `self.x = tainted` taints `self`); closures and globals are flow-insensitive; calls are resolved by name, and a function is analysed once for all its callers: with `def wrap(a): return a`, `t = wrap(input())` makes every `wrap(...)` result tainted, so `system(wrap("safe"))` is reported too;
+- under-approximations: aliasing (two names for one object), output parameters (C's `fgets(buf, ...)` or `snprintf(cmd, ...)` do not taint `buf` or `cmd`), dynamic features (`getattr`, `exec` of strings), calls through function pointers, and branching on tainted data (implicit flows, #49);
+- attribute sources are matched as text in the statement, outside string literals and comments.
 
 ## 4. HTTP API
 

@@ -1,5 +1,6 @@
 """Helpers shared by the language visitors that build `CallSite`s."""
 
+from collections import Counter
 from dataclasses import dataclass, field
 from typing import Callable, Dict, FrozenSet, Iterator, List, Optional, Tuple
 
@@ -70,3 +71,28 @@ def _flow(node: Node, enclosing: int, regions: CallRegions) -> CallFlow:
     if regions.receiver is not None and _contains(regions.receiver, node):
         return CallFlow(call=enclosing, role="receiver")
     return CallFlow(call=enclosing, role="callee")
+
+
+def outermost(node: Node, types: FrozenSet[str]) -> Iterator[Node]:
+    """The nodes of the given types under `node` (itself included) that are not
+    inside another one."""
+    stack = [node]
+    while stack:
+        current = stack.pop()
+        if current.type in types:
+            yield current
+        else:
+            stack.extend(reversed(current.children))
+
+
+def uses_outside_calls(
+    node: Node, uses: Callable[[Node], List[str]], calls: FrozenSet[str]
+) -> List[str]:
+    """The uses under `node` that are not inside a call, for a `uses` function
+    that lists every occurrence: all the uses, minus those of the outermost
+    calls."""
+    names = uses(node)
+    counts = Counter(names)
+    for call in outermost(node, calls):
+        counts.subtract(uses(call))
+    return [name for name in dict.fromkeys(names) if counts[name] > 0]

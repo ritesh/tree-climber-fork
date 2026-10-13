@@ -208,6 +208,10 @@ class CFGVisitor(abc.ABC):
         """Extract variable uses under an AST node."""
         pass
 
+    def get_direct_uses(self, ast_node: Node) -> Optional[List[str]]:
+        """The uses under an AST node outside any call, or None if not known."""
+        return None
+
     def create_node(self, *args, **kwargs) -> int:
         """Create a new CFG node and return its ID"""
         node_id = self.cfg.create_node(*args, **kwargs)
@@ -221,6 +225,7 @@ class CFGVisitor(abc.ABC):
                 variable_definitions=self.get_definitions(node.ast_node),
                 variable_uses=self.get_uses(node.ast_node),
                 call_sites=call_sites,
+                direct_uses=self.get_direct_uses(node.ast_node),
             )
 
         return node_id

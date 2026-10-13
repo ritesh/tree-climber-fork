@@ -71,7 +71,20 @@ def _regions(call: Node) -> CallRegions:
     return CallRegions(arguments=_argument_nodes(call), receiver=_receiver(call))
 
 
-def _argument(node: Node, cache: Dict[int, List[str]]) -> CallArgument:
+def outside_calls(calls: List[Node]) -> Dict[int, List[str]]:
+    """A uses cache in which every call reads nothing, so `collect_uses` with it
+    gives the uses outside calls."""
+    return {call.id: [] for call in calls}
+
+
+def direct_uses(ast_node: Node) -> List[str]:
+    """The uses under an AST node outside any call that runs with it."""
+    return collect_uses(ast_node, outside_calls(list(call_nodes(ast_node))))
+
+
+def _argument(
+    node: Node, cache: Dict[int, List[str]], blocked: Dict[int, List[str]]
+) -> CallArgument:
     def uses_of(expression: Node) -> List[str]:
         uses = collect_uses(expression, cache)
         cache[expression.id] = uses
@@ -86,6 +99,7 @@ def _argument(node: Node, cache: Dict[int, List[str]]) -> CallArgument:
                 uses=uses_of(value),
                 keyword=get_source_text(name),
                 kind="keyword",
+                direct_uses=collect_uses(value, blocked),
             )
     if node.type in ("list_splat", "dictionary_splat") and node.named_children:
         inner = node.named_children[0]
@@ -93,8 +107,13 @@ def _argument(node: Node, cache: Dict[int, List[str]]) -> CallArgument:
             text=get_source_text(inner),
             uses=uses_of(inner),
             kind="star" if node.type == "list_splat" else "double_star",
+            direct_uses=collect_uses(inner, blocked),
         )
-    return CallArgument(text=get_source_text(node), uses=uses_of(node))
+    return CallArgument(
+        text=get_source_text(node),
+        uses=uses_of(node),
+        direct_uses=collect_uses(node, blocked),
+    )
 
 
 def assigned_names(call: Node) -> List[str]:
@@ -144,9 +163,12 @@ def call_sites(ast_node: Node) -> List[CallSite]:
     """
     calls = list(call_nodes(ast_node))
     cache: Dict[int, List[str]] = {}
+    blocked = outside_calls(calls)
     arguments: Dict[int, List[CallArgument]] = {}
     for call in reversed(calls):
-        arguments[call.id] = [_argument(a, cache) for a in _argument_nodes(call)]
+        arguments[call.id] = [
+            _argument(a, cache, blocked) for a in _argument_nodes(call)
+        ]
 
     pairs: List[Tuple[CallSite, Node]] = []
     for call in calls:
@@ -158,6 +180,7 @@ def call_sites(ast_node: Node) -> List[CallSite]:
             receiver=get_source_text(receiver) if receiver else None,
             arguments=arguments[call.id],
             assigned_to=assigned_names(call),
+            receiver_uses=collect_uses(receiver, blocked) if receiver else None,
         )
         pairs.append((with_span(site, call), call))
     link_call_flows(pairs, _regions, FLOW_BOUNDARIES)

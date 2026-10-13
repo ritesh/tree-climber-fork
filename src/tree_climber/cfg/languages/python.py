@@ -39,11 +39,13 @@ from tree_climber.cfg.languages.python_calls import (
     call_nodes,
     call_sites,
     decorator_call_sites,
+    direct_uses,
 )
 from tree_climber.cfg.languages.python_bindings import (
     collect_bindings,
     collect_for_header_bindings,
     collect_local_names,
+    collect_uses,
     collect_pattern_bindings,
     declared_scope_names,
     is_irrefutable_pattern,
@@ -111,6 +113,10 @@ class PythonCFGVisitor(CFGVisitor):
     def get_uses(self, ast_node: Node) -> List[str]:
         """Extract variable uses under an AST node."""
         return collect_bindings(ast_node).uses
+
+    def get_direct_uses(self, ast_node: Node) -> List[str]:
+        """Variable uses under an AST node outside any call."""
+        return direct_uses(ast_node)
 
     # Helpers
     @staticmethod
@@ -378,6 +384,7 @@ class PythonCFGVisitor(CFGVisitor):
         metadata = self.cfg.nodes[node_id].metadata
         metadata.variable_definitions = bindings.definitions
         metadata.variable_uses = bindings.uses
+        metadata.direct_uses = None
         metadata.call_sites = self.get_call_sites(node) + decorator_call_sites(node)
         metadata.function_calls = [
             site.callee for site in metadata.call_sites if site.callee is not None
@@ -582,6 +589,10 @@ class PythonCFGVisitor(CFGVisitor):
         metadata = self.cfg.nodes[header_id].metadata
         metadata.variable_definitions = bindings.definitions
         metadata.variable_uses = bindings.uses
+        in_iterable = collect_uses(iterable)
+        metadata.direct_uses = direct_uses(iterable) + [
+            name for name in bindings.uses if name not in in_iterable
+        ]
 
         exit_id = self.create_node(NodeType.EXIT, source_text="EXIT: for loop")
 
@@ -631,6 +642,7 @@ class PythonCFGVisitor(CFGVisitor):
             metadata = self.cfg.nodes[case_id].metadata
             metadata.variable_definitions = []
             metadata.variable_uses = bindings.uses
+            metadata.direct_uses = list(bindings.uses)
             metadata.function_calls = []
             metadata.call_sites = []
             for source_id, label in pending:
@@ -648,6 +660,7 @@ class PythonCFGVisitor(CFGVisitor):
                 metadata = self.cfg.nodes[capture_id].metadata
                 metadata.variable_definitions = bindings.definitions
                 metadata.variable_uses = []
+                metadata.direct_uses = []
                 metadata.function_calls = []
                 metadata.call_sites = []
                 self.cfg.add_edge(case_id, capture_id, "true")

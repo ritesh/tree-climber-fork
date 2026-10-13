@@ -25,6 +25,7 @@ Run `tree-climber --list-languages` to see what your install supports.
 - **Dataflow Solver**: Implements iterative dataflow analysis algorithms
 - **AST Utils**: Tree-sitter integration and AST manipulation utilities
 - **Query**: `tree_climber.query` answers questions about the graphs (lookup, successors and paths, def-use, slices, networkx export) without hand-written traversals; see the [Python guide](./docs/python-guide.md#querying-the-graph)
+- **Taint analysis**: `tree_climber.taint` traces untrusted input from sources to sinks across calls, with call-site sanitizers, argument positions, JSON rules and example rule sets; see the [Python guide](./docs/python-guide.md#taint-analysis)
 - **Visualization**: Web-based interactive CFG visualization
 
 ### Analysis Capabilities

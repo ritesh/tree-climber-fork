@@ -29,12 +29,15 @@ class CallArgument:
 
     `kind` is "positional", "keyword" (`key=value`, with `keyword` set), "star"
     (`*args`) or "double_star" (`**kwargs`); the last two are Python only.
+    `uses` are all the variables the argument reads; `direct_uses` those it reads
+    outside any call inside it (`x` in `x + escape(y)`), or None when not known.
     """
 
     text: str
     uses: List[str] = field(default_factory=list)
     keyword: Optional[str] = None
     kind: str = "positional"
+    direct_uses: Optional[List[str]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -71,7 +74,8 @@ class CallSite:
     `callee_text` is always the whole callee expression (`os.system`). `receiver`
     is the text of the object in `obj.f()`. `assigned_to` lists the variables that
     receive the result when the call is the whole right-hand side of an
-    assignment; `feeds` links a call nested in another call. The span is the
+    assignment; `feeds` links a call nested in another call. `receiver_uses` are
+    the variables the receiver reads outside any call in it. The span is the
     whole call expression.
     """
 
@@ -81,6 +85,7 @@ class CallSite:
     arguments: List[CallArgument] = field(default_factory=list)
     assigned_to: List[str] = field(default_factory=list)
     feeds: Optional[CallFlow] = None
+    receiver_uses: Optional[List[str]] = None
     start_byte: int = 0
     end_byte: int = 0
     start_point: Tuple[int, int] = (0, 0)
@@ -165,6 +170,8 @@ class CFGNodeMetadata:
 
     `function_calls` holds the names of the calls that have one, in the same order
     as `call_sites`, which describes every call. `function` is set on ENTRY nodes.
+    `direct_uses` are the uses outside every call (`x` in `y = x + f(z)`), or None
+    when not known.
     """
 
     function_calls: List[str] = field(default_factory=list)
@@ -172,6 +179,7 @@ class CFGNodeMetadata:
     variable_uses: List[str] = field(default_factory=list)
     call_sites: List[CallSite] = field(default_factory=list)
     function: Optional[FunctionInfo] = None
+    direct_uses: Optional[List[str]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert metadata to dictionary for JSON serialization"""

@@ -17,6 +17,7 @@ from tree_climber.cfg.call_sites import (
     CallRegions,
     link_call_flows,
     preorder,
+    uses_outside_calls,
     with_span,
 )
 from tree_climber.cfg.cfg_types import (
@@ -121,10 +122,15 @@ class JavaCFGVisitor(CFGVisitor):
                 callee_text=callee_text,
                 receiver=get_source_text(receiver) if receiver else None,
                 arguments=[
-                    CallArgument(text=get_source_text(a), uses=self.get_uses(a))
+                    CallArgument(
+                        text=get_source_text(a),
+                        uses=self.get_uses(a),
+                        direct_uses=self.get_direct_uses(a),
+                    )
                     for a in self._argument_nodes(call)
                 ],
                 assigned_to=self._assigned_names(call),
+                receiver_uses=self.get_direct_uses(receiver) if receiver else None,
             )
             pairs.append((with_span(site, call), call))
         link_call_flows(
@@ -165,6 +171,12 @@ class JavaCFGVisitor(CFGVisitor):
             return None
 
         return dfs(ast_node, process_definition)
+
+    CALLS = frozenset({"method_invocation"})
+
+    def get_direct_uses(self, ast_node: Node) -> List[str]:
+        """Variable uses under an AST node outside any call."""
+        return uses_outside_calls(ast_node, self.get_uses, self.CALLS)
 
     def get_uses(self, ast_node: Node) -> List[str]:
         """Extract variable uses under an AST node."""
