@@ -143,6 +143,8 @@ class FactGraph:
         Moves inside a node are free, so this is a 0-1 breadth-first search.
         """
         seeds = list(seeds)
+        if not seeds:
+            return None
         source = seeds[0].node
         cost: Dict[Fact, int] = {seed: 0 for seed in seeds}
         parent: Dict[Fact, Tuple[Fact, Move]] = {}

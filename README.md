@@ -24,6 +24,7 @@ Run `tree-climber --list-languages` to see what your install supports.
 - **CFG Builder**: Generates control flow graphs using visitor pattern
 - **Dataflow Solver**: Implements iterative dataflow analysis algorithms
 - **AST Utils**: Tree-sitter integration and AST manipulation utilities
+- **Query**: `tree_climber.query` answers questions about the graphs (lookup, successors and paths, def-use, slices, networkx export) without hand-written traversals; see the [Python guide](./docs/python-guide.md#querying-the-graph)
 - **Visualization**: Web-based interactive CFG visualization
 
 ### Analysis Capabilities

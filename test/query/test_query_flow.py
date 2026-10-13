@@ -397,6 +397,12 @@ def test_all_paths_filters_and_avoid(language):
     assert [p.nodes for p in graph.paths(source, target, labels=[FLOW, TRUE])] == [
         ids(graph, "src", "clean", "cond", "sink", "zero")
     ]
+    assert [
+        p.nodes for p in graph.paths(found["cond"], target, labels=[FLOW, TRUE])
+    ] == [ids(graph, "cond", "sink", "zero")]
+    assert [p.nodes for p in graph.paths(found["cond"], target, exclude=[TRUE])] == [
+        ids(graph, "cond", "reset", "zero")
+    ]
     assert graph.paths(found["out"], found["src"]) == []
     kept = graph.paths(source, target, avoid=[source, target])
     assert len(kept) == 2
@@ -448,10 +454,9 @@ def test_bounds_hold_on_a_graph_with_thousands_of_paths():
     assert graph.paths(entry, exit_node, max_length=10) == []
     shortest = graph.shortest_path(entry, exit_node)
     assert shortest is not None
-    assert (
-        len(graph.paths(entry, exit_node, max_paths=5000, max_length=len(shortest) - 1))
-        == 4096
-    )
+    edges = len(shortest) - 1
+    assert len(graph.paths(entry, exit_node, max_paths=5000, max_length=edges)) == 4096
+    assert graph.paths(entry, exit_node, max_paths=5000, max_length=edges - 1) == []
 
 
 def test_unreachable_targets_do_not_wander_in_loops():
@@ -464,3 +469,13 @@ def test_unreachable_targets_do_not_wander_in_loops():
     assert graph.shortest_path(start, other) is None
     inner = graph.by_text("a = a - 1")[0]
     assert len(graph.paths(start, inner)) == 1
+
+
+def test_an_unreachable_target_is_answered_without_enumerating_paths():
+    other = "\n\ndef g():\n    return 2\n"
+    graph = CodeGraph.from_source("python", chain_of_diamonds(25) + other)
+    entry = graph.function_nodes("f")[0]
+    unreachable = graph.by_text("return 2")[0]
+
+    assert graph.paths(entry, unreachable) == []
+    assert graph.shortest_path(entry, unreachable) is None

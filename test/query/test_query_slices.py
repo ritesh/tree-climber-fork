@@ -461,3 +461,67 @@ def test_two_arguments_stay_apart():
     )
     assert constant not in graph.backward_slice(ret, extra_edges=[first, second, back])
     assert tainted in graph.backward_slice(ret, extra_edges=[first, second, back])
+
+
+@LANGUAGES
+def test_a_node_without_variables_is_its_own_slice(language):
+    graph = build(language)
+    entry = roles(graph)["main_entry"]
+
+    assert graph.forward_slice(entry) == [entry]
+    assert graph.backward_slice(entry) == [entry]
+
+
+def test_shortest_data_flow_path_counts_steps_between_nodes_only():
+    source = (
+        "def e1(p):\n    pass\n\n\n"
+        "def e2(q):\n    pass\n\n\n"
+        "def e3(r):\n    pass\n\n\n"
+        "def main():\n"
+        "    a = 1\n"
+        "    b = a\n"
+        "    c = b\n"
+        "    t = c\n"
+    )
+    graph = CodeGraph.from_source("python", source)
+    entries = {entry.source_text: entry for entry in graph.functions()}
+    start, end = graph.by_text("a = 1")[0], graph.by_text("t = c")[0]
+    detour = [
+        DataFlowEdge(start.id, "a", entries["e1"].id, "p", "hop"),
+        DataFlowEdge(entries["e1"].id, "p", entries["e2"].id, "q", "hop"),
+        DataFlowEdge(entries["e2"].id, "q", entries["e3"].id, "r", "hop"),
+        DataFlowEdge(entries["e3"].id, "r", end.id, "c", "hop"),
+    ]
+
+    path = graph.data_flow_path(start, end, extra_edges=detour)
+
+    assert path is not None
+    assert path.texts == ["a = 1", "b = a", "c = b", "t = c"]
+    assert len(graph.data_flow_paths(start, end, extra_edges=detour)) == 2
+
+
+def test_an_unreachable_target_is_answered_without_enumerating_paths():
+    lines = ["a0 = input()", "b0 = input()"]
+    for index in range(1, 26):
+        previous = f"a{index - 1} + b{index - 1}"
+        lines += [f"a{index} = {previous}", f"b{index} = {previous}"]
+    lines.append("z = 1")
+    graph = CodeGraph.from_source("python", "\n".join(lines) + "\n")
+    start, unreachable = graph.by_text("a0 = input()")[0], graph.by_text("z = 1")[0]
+
+    assert graph.data_flow_path(start, unreachable) is None
+    assert graph.data_flow_paths(start, unreachable) == []
+    last = graph.by_text("a25 =")[0]
+    assert len(graph.data_flow_paths(start, last, max_paths=7)) == 7
+
+
+@LANGUAGES
+def test_a_node_without_variables_starts_no_data_flow_path(language):
+    graph = build(language)
+    found = roles(graph)
+    entry = found["main_entry"]
+
+    assert graph.data_flow_path(entry, found["out"]) is None
+    assert graph.data_flow_paths(entry, found["out"]) == []
+    assert graph.data_flow_path(found["src"], entry) is None
+    assert graph.data_flow_paths(found["src"], entry) == []

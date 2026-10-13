@@ -113,10 +113,7 @@ class CodeGraph:
 
         def calls(node: CFGNode) -> bool:
             called = set(node.metadata.function_calls)
-            for site in node.metadata.call_sites:
-                called.add(site.callee_text)
-                if site.callee is not None:
-                    called.add(site.callee)
+            called.update(site.callee_text for site in node.metadata.call_sites)
             return not wanted.isdisjoint(called)
 
         return self._filter(calls)

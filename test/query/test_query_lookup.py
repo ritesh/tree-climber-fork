@@ -67,6 +67,7 @@ def test_by_text_regex(language):
         "out",
     ]
     assert graph.by_text(re.compile(r"^total$")) == []
+    assert named(graph, graph.by_text(re.compile(r"input\("))) == ["src"]
 
 
 @LANGUAGES

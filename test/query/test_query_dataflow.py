@@ -291,3 +291,41 @@ def test_all_data_flow_paths_variable_avoid_and_dedupe(language):
     )
     again = graph.data_flow_paths(found["src"], found["ret"])
     assert len(again) == len({tuple(path.steps) for path in again})
+
+
+def test_data_flow_edge_json_form():
+    edge = DataFlowEdge(1, "a", 2, "b", "argument")
+
+    assert edge.to_dict() == {
+        "source": 1,
+        "source_variable": "a",
+        "target": 2,
+        "target_variable": "b",
+        "kind": "argument",
+    }
+    assert edge == DataFlowEdge(1, "a", 2, "b", "argument")
+    assert hash(edge) == hash(DataFlowEdge(1, "a", 2, "b", "argument"))
+
+
+@LANGUAGES
+def test_results_are_in_a_stable_order(language):
+    graph = build(language)
+
+    for variable in ("y", "total"):
+        for chains in (graph.def_use(variable), graph.use_def(variable)):
+            assert list(chains) == sorted(chains)
+            assert all(values == sorted(values) for values in chains.values())
+    edges = graph.data_flow_edges()
+    assert edges == sorted(edges, key=lambda e: (e.source, e.target, e.source_variable))
+
+
+@LANGUAGES
+def test_results_do_not_depend_on_the_solver_order(language):
+    graph = build(language)
+    graph._def_use.chains["y"].reverse()
+    graph._use_def.chains["y"].reverse()
+    graph._def_use.chains["total"].reverse()
+
+    assert list(graph.def_use("y")) == sorted(graph.def_use("y"))
+    assert list(graph.use_def("y")) == sorted(graph.use_def("y"))
+    assert list(graph.def_use("total")) == sorted(graph.def_use("total"))
