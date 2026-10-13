@@ -578,6 +578,232 @@ Check:
 - a call without a usable name (`f()(x)`, `handlers[k](x)`) is still a site, with `callee=None`, and is left out of `function_calls`;
 - the same structure exists for C and Java: `s->cb(x)` and `(*fp)(x)` in C are sites with no name; Java `new Foo(x)` is not a call site yet.
 
+### Querying the graph
+
+`tree_climber.query` answers questions about the graph without a hand-written traversal. Build a `CodeGraph` once, from source or from a `CFG` you already have (`CodeGraph.from_cfg(cfg)`); the same API works for C, Java and Python. The examples below use this program:
+
+```python
+def handler(request):
+    name = request.args.get("name")
+    cmd = build(name)
+    if cmd:
+        os.system(cmd)
+    else:
+        cmd = "true"
+    return finish(cmd)
+
+
+def build(text):
+    return "ls " + text
+
+
+def finish(value):
+    return value
+```
+
+```python
+from tree_climber.query import CALL_KINDS, CodeGraph, DataFlowEdge
+
+graph = CodeGraph.from_source("python", SOURCE)  # SOURCE holds the program above
+```
+
+Lookups return `CFGNode`s sorted by id; anywhere a node is taken, its id works too.
+
+```python
+[n.source_text for n in graph.calling("system")]      # ['os.system(cmd)']
+[n.source_text for n in graph.calling("os.system")]   # ['os.system(cmd)']
+[n.source_text for n in graph.defining("cmd")]        # ['cmd = build(name)', 'cmd = "true"']
+[n.source_text for n in graph.using("cmd")]           # ['cmd', 'os.system(cmd)', 'return finish(cmd)']
+[n.source_text for n in graph.by_text("cmd =")]       # ['cmd = build(name)', 'cmd = "true"']
+[n.source_text for n in graph.by_type("CONDITION")]   # ['cmd']
+[n.source_text for n in graph.functions()]            # ['handler', 'build', 'finish']
+graph.function_of(graph.calling("system")[0]).source_text   # 'handler'
+[n.id for n in graph.function_nodes("build")]         # [9, 10, 11]
+```
+
+`calling` matches the callee name and the whole callee expression, and takes several names (any of them). `by_text` takes a substring, `exact=True`, or a compiled regex. A function is identified by its `ENTRY` node (`function_nodes` given any other node raises `ValueError`); `function_of` and `function_nodes` use the rule that a function is what is reachable from its entry without following call edges.
+
+#### Flow queries
+
+Edges are `flow` (no label), `true`, `false`, `exception`, `function_call` and `function_return`. `labels` keeps only those kinds, `exclude` drops them, and paths also take `avoid`, nodes a path may not pass through.
+
+```python
+cond = graph.by_type("CONDITION")[0]
+[n.source_text for n in graph.successors(cond, labels=["true"])]    # ['os.system(cmd)']
+[n.source_text for n in graph.successors(cond, labels=["false"])]   # ['cmd = "true"']
+
+call = graph.calling("finish")[0]
+[(n.source_text, graph.edge_kind(call, n)) for n in graph.successors(call)]
+# [('handler', 'flow'), ('finish', 'function_call')]
+[n.source_text for n in graph.successors(call, exclude=CALL_KINDS)]  # ['handler']
+
+entry = graph.functions()[0]
+len(graph.reachable(entry)), len(graph.reachable(entry, exclude=CALL_KINDS))   # (14, 8)
+finish = graph.function_nodes("finish")[0]
+graph.can_reach(entry, finish)                          # True
+graph.can_reach(entry, finish, exclude=CALL_KINDS)      # False
+
+print(graph.shortest_path(entry, graph.calling("system")[0]))
+```
+
+```
+[0] ENTRY handler
+  --> [2] name = request.args.get("name")
+  --> [3] cmd = build(name)
+  --> [4] cmd
+  --true--> [6] os.system(cmd)
+```
+
+`paths(source, target)` lists the paths that visit no node twice, depth first with successors in id order, so a loop cannot make it run forever. It stops at `max_paths` (default 100) and never returns a path longer than `max_length` edges (default: no limit):
+
+```python
+done = graph.by_text("return finish(cmd)")[0]
+for path in graph.paths(entry, done):
+    print(path)
+    print()
+```
+
+```
+[0] ENTRY handler
+  --> [2] name = request.args.get("name")
+  --> [3] cmd = build(name)
+  --> [4] cmd
+  --true--> [6] os.system(cmd)
+  --> [8] return finish(cmd)
+
+[0] ENTRY handler
+  --> [2] name = request.args.get("name")
+  --> [3] cmd = build(name)
+  --> [4] cmd
+  --false--> [7] cmd = "true"
+  --> [8] return finish(cmd)
+```
+
+`len(graph.paths(entry, done, max_paths=1))` is `1`, and `max_length=4` gives none because both paths have five edges (`max_length=5` gives both). When a call returns exactly `max_paths` paths there may be more.
+
+#### Data-flow queries
+
+`def_use(variable)` maps each definition node to the nodes using it, and `use_def(variable)` each use to the definitions that reach it. They are built on the same reaching-definitions solver and `DefUseSolver` / `UseDefSolver` as the rest of the framework.
+
+```python
+graph.def_use("cmd")   # {3: [4, 6, 8], 7: [8]}
+graph.use_def("cmd")   # {4: [3], 6: [3], 8: [3, 7]}
+```
+
+Slices follow data dependences only (the `if cmd` test is a data use of `cmd`, but a node is not in a slice just because it decides whether another one runs). Both include the node itself; `variable=` starts from one variable of the node.
+
+```python
+sink = graph.calling("system")[0]
+[n.source_text for n in graph.forward_slice(entry)]
+# ['handler', 'name = request.args.get("name")', 'cmd = build(name)', 'cmd', 'os.system(cmd)', 'return finish(cmd)']
+[n.source_text for n in graph.backward_slice(sink)]
+# ['handler', 'name = request.args.get("name")', 'cmd = build(name)', 'os.system(cmd)']
+```
+
+`data_flow_path(source, target)` is the shortest chain of definitions and uses between two nodes; each step shows the variable carried. It returns `None` when the value of the source never reaches the target (here the `else` branch's `cmd` never reaches `os.system`):
+
+```python
+build_call = graph.calling("build")[0]
+print(graph.data_flow_path(build_call, sink))
+print(graph.data_flow_path(graph.by_text('cmd = "true"')[0], sink))
+```
+
+```
+[3] cmd = build(name)
+  --def_use cmd--> [6] os.system(cmd)
+None
+```
+
+`data_flow_paths` lists them all, with the same `max_paths` / `max_length` bounds. Neither returns a path that comes back to its source node.
+
+#### Paths as data
+
+Every path is a `Path` of `PathStep`s: the node, its type and text, the kind of the edge that arrives at it, and the variable a data-flow edge carries. Paths are frozen, hashable and compare by value, so tests can assert on them; `path.nodes`, `path.edges` and `path.texts` give the parts, `str(path)` is the terminal form above, and `path.to_dict()` is JSON-compatible:
+
+```python
+json.dumps(graph.data_flow_path(build_call, sink).to_dict())
+# {"steps": [{"node": 3, "node_type": "STATEMENT", "text": "cmd = build(name)", "edge": null, "variable": null}, {"node": 6, "node_type": "STATEMENT", "text": "os.system(cmd)", "edge": "def_use", "variable": "cmd"}]}
+```
+
+`graph.to_networkx()` returns a `networkx.MultiDiGraph` with the control edges (`layer="control"`, `kind` as above); `data_flow=True` adds the data-flow edges (`layer="data"`, with `source_variable` and `target_variable`). Node attributes are `text`, `node_type`, `function`, `calls`, `definitions` and `uses`.
+
+#### Edges from other analyses
+
+Dataflow does not cross calls, so `forward_slice(name = ...)` stops at the call to `build`. An analysis that connects arguments to parameters and returns to call sites describes its flows as `DataFlowEdge(source, source_variable, target, target_variable, kind)` and passes them to the data-flow queries with `extra_edges=`. The edges are used for that call only; nothing is stored in the graph. Here they are written by hand:
+
+```python
+build_entry = [n for n in graph.functions() if n.source_text == "build"][0]
+build_ret = graph.by_text('return "ls " + text')[0]
+edges = [
+    DataFlowEdge(build_call.id, "name", build_entry.id, "text", "argument"),
+    DataFlowEdge(build_ret.id, "text", build_call.id, "cmd", "return"),
+]
+req = graph.by_text("name =")[0]
+[n.source_text for n in graph.forward_slice(req)]
+# ['name = request.args.get("name")', 'cmd = build(name)', 'cmd', 'os.system(cmd)', 'return finish(cmd)']
+[n.source_text for n in graph.forward_slice(req, extra_edges=edges)]
+# ['name = request.args.get("name")', 'cmd = build(name)', 'cmd', 'os.system(cmd)', 'return finish(cmd)', 'build', 'return "ls " + text']
+print(graph.data_flow_path(req, build_ret, extra_edges=edges))
+```
+
+```
+[2] name = request.args.get("name")
+  --def_use name--> [3] cmd = build(name)
+  --argument text--> [9] ENTRY build
+  --def_use text--> [11] return "ls " + text
+```
+
+An edge leaves the facts named `source_variable` at the source node and arrives at `target_variable` at the target (a definition if the node defines it, a use if it uses it). A variable that the node neither defines nor uses, such as a name for "the return value", applies to the whole node; a node with no variables at all (`return 1`) gets one for the edge, so the edge is still followed and the node can start a path or a slice. Unknown node ids raise `KeyError`.
+
+#### A taint tracker in a few lines
+
+The prototype in the taint epic (#44) was 40 lines of traversal over `cfg.nodes` and def-use chains. With the query layer it is a path search that avoids the sanitizers:
+
+```python
+SOURCES = {"input", "getenv"}
+SINKS = {"system", "eval", "execute"}
+SANITIZERS = {"escape", "quote"}
+
+graph = CodeGraph.from_source("python", code)
+sanitizers = graph.calling(*SANITIZERS)
+
+for source in graph.calling(*SOURCES):
+    for sink in graph.calling(*SINKS):
+        path = graph.data_flow_path(source, sink, avoid=sanitizers)
+        if path:
+            print(" -> ".join(path.texts))
+```
+
+On
+
+```python
+def run(flag):
+    data = input()
+    safe = escape(data)
+    system(safe)
+    cmd = "ls " + data
+    if flag:
+        data = "constant"
+    system(data)
+    eval(cmd)
+```
+
+it prints
+
+```
+data = input() -> system(data)
+data = input() -> cmd = "ls " + data -> eval(cmd)
+```
+
+`system(safe)` is blocked by `escape`; `system(data)` is found because the reassignment happens on one branch only; a reassignment on every path would kill the flow. `test/query/test_query_taint.py` keeps the original prototype next to this version and checks that they find the same source/sink pairs.
+
+Check, and what is approximate:
+- the data-flow model is statement-level, like the def-use chains: every variable a statement uses flows into every variable it defines (`cmd = build(name)` makes `cmd` depend on `build` as well as `name`). Extra edges are the exception: they follow the variable they name;
+- flow queries follow call and return edges like any other edge, and a path need not return to the call site it entered from. Pass `exclude=CALL_KINDS` to stay inside one function. Calls are linked by name, so `obj.f()` reaches every function named `f`;
+- slices and data-flow paths do not cross calls unless you pass `extra_edges`; they have no control dependence (nodes that only decide whether another runs are not included);
+- a weak update (`d["k"] = v`, `obj.f = v`) defines and uses the root name, so a path continues through it, as in the def-use chains;
+- `paths` and `data_flow_paths` are depth first, cut off at `max_paths`, and `shortest_path` breaks ties toward lower node ids; none of them knows whether a path is feasible.
+
 ## 4. HTTP API
 
 ```bash
