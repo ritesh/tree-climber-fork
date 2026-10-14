@@ -110,3 +110,27 @@ def test_control_is_transitive_through_nested_branches():
         "b",
         "y = 1",
     ]
+
+
+def test_the_data_of_a_condition_brings_in_its_own_conditions():
+    source = (
+        "def f(a):\n"
+        "    if a:\n"
+        "        flag = 1\n"
+        "    else:\n"
+        "        flag = 2\n"
+        "    if flag:\n"
+        "        y = 1\n"
+        "    return 0\n"
+    )
+    graph = CodeGraph.from_source("python", source)
+    inner = graph.by_text("y = 1")[0]
+
+    assert [n.source_text for n in graph.backward_slice(inner, control=True)] == [
+        "f",
+        "a",
+        "flag = 1",
+        "flag = 2",
+        "flag",
+        "y = 1",
+    ]

@@ -135,7 +135,7 @@ def accesses(ast_node: Node) -> Accesses:
             result.writes[name] = tag
             if not _compound(assignment):
                 continue
-        elif assignment is not None:
+        elif assignment is not None and not _compound(assignment):
             continue
         result.reads.setdefault(name, set()).add(tag)
     return result

@@ -62,6 +62,15 @@ class TestImplicitFlows:
             "x = input() -> match x -> cmd = 1 -> system(cmd)"
         ]
 
+    def test_a_later_case_decides(self):
+        code = (
+            'x = input()\ncmd = 0\nmatch x:\n    case "a":\n        pass\n'
+            '    case "b":\n        cmd = 1\nsystem(cmd)\n'
+        )
+        assert texts(code, implicit_flows=True) == [
+            'x = input() -> match x -> case "b" -> cmd = 1 -> system(cmd)'
+        ]
+
     def test_returns(self):
         code = (
             'def check(x):\n    if x == "admin":\n        return True\n    return False\n\n\n'
@@ -92,6 +101,14 @@ class TestImplicitFlows:
         code = (
             "x = input()\ntry:\n    v = int(x)\nexcept E:\n    cmd = 1\nsystem(cmd)\n"
         )
+        assert texts(code, implicit_flows=True) == []
+
+    def test_an_exception_edge_from_a_condition_is_not_an_implicit_flow(self):
+        code = "x = input()\ntry:\n    if x:\n        y = g()\nexcept E:\n    cmd = 2\nsystem(cmd)\n"
+        assert texts(code, implicit_flows=True) == []
+
+    def test_statements_that_may_raise_are_not_branches(self):
+        code = "x = input()\ntry:\n    cmd = 1\nexcept E:\n    pass\nsystem(cmd)\n"
         assert texts(code, implicit_flows=True) == []
 
     def test_sink_arguments_are_not_tainted_by_control(self):
@@ -183,6 +200,12 @@ class TestFieldSensitivity:
         assert len(flows(code, "c")) == 2
         assert texts(code, "c", field_sensitive=True) == [
             "s.a = input(); -> system(s.a);"
+        ]
+
+    def test_uses_outside_the_statement_text_are_read_whole(self):
+        code = 'd = {}\nd["k"] = input()\n\n\n@deco\ndef f(a=d):\n    pass\n\n\nsystem(f)\n'
+        assert texts(code, field_sensitive=True) == [
+            'd["k"] = input() -> @deco -> system(f)'
         ]
 
     def test_java_reads(self):

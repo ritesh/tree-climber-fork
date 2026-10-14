@@ -517,27 +517,13 @@ def _bare_variable(site: CallSite, index: int) -> Optional[str]:
 
 
 def _match_cases(cfg: CFG) -> Dict[int, List[int]]:
-    """The case conditions of each switch head that has one successor (Python
-    `match`): its successor, then each case's `false` successor while it is a
-    condition. A case decides on the head's subject, which it does not read."""
+    """The first case of each switch head that has one successor (Python `match`):
+    it decides on the head's subject, which it does not read. Later cases depend
+    on the earlier ones' `false` edges."""
     cases: Dict[int, List[int]] = {}
     for node_id, node in cfg.nodes.items():
-        if node.node_type != NodeType.SWITCH_HEAD or len(node.successors) != 1:
-            continue
-        chain: List[int] = []
-        current: Optional[int] = next(iter(node.successors))
-        while (
-            current is not None
-            and current not in chain
-            and cfg.nodes[current].node_type == NodeType.CONDITION
-        ):
-            chain.append(current)
-            case = cfg.nodes[current]
-            current = next(
-                (s for s in case.successors if case.edge_labels.get(s) == "false"),
-                None,
-            )
-        cases[node_id] = chain
+        if node.node_type == NodeType.SWITCH_HEAD and len(node.successors) == 1:
+            cases[node_id] = list(node.successors)
     return cases
 
 

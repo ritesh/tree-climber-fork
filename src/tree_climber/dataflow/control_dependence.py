@@ -77,11 +77,7 @@ def _post_dominators(
     while changed:
         changed = False
         for node in order[1:]:
-            candidates = [
-                s
-                for s, _ in _successors(cfg, node, members)
-                if s in ipdom and s in rank
-            ]
+            candidates = [s for s, _ in _successors(cfg, node, members) if s in ipdom]
             if not candidates:
                 continue
             new = candidates[0]
@@ -123,8 +119,6 @@ def control_dependence(cfg: CFG) -> ControlDependence:
                         if runner not in dependents:
                             dependents.append(runner)
                     runner = ipdom[runner]
-    for values in result.controllers.values():
-        values.sort()
     for values in result.dependents.values():
         values.sort()
     return result

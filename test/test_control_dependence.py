@@ -128,6 +128,25 @@ class TestPython:
     def test_straight_line_code_has_none(self):
         assert controllers("python", "x = 1\ny = x\n") == {}
 
+    def test_a_recursive_call_does_not_branch(self):
+        found = controllers(
+            "python", "def f(n):\n    if n:\n        f(n - 1)\n    return n\n"
+        )
+
+        assert found == {"f(n - 1)": [("n", "true")]}
+
+    def test_dependents_are_in_node_order(self):
+        builder = CFGBuilder("python")
+        builder.setup_parser()
+        cfg = builder.build_cfg(
+            "def f(x):\n    while x:\n        a = 1\n        b = 2\n        x = x - 1\n    return x\n"
+        )
+        result = control_dependence(cfg)
+
+        for dependents in result.dependents.values():
+            assert dependents == sorted(dependents)
+        assert any(len(d) > 2 for d in result.dependents.values())
+
     def test_calls_do_not_branch(self):
         found = controllers(
             "python",
