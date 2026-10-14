@@ -787,6 +787,33 @@ None
 
 `data_flow_paths` lists them all, with the same `max_paths` / `max_length` bounds. Neither returns a path that comes back to its source node.
 
+#### Control dependence
+
+A node is control dependent on a branch when the edge the branch takes decides whether the node runs. `control_dependences(node)` lists the branches and edge labels a node depends on, `control_dependents(branch)` the nodes a branch decides, and `control=True` adds control dependence to a slice:
+
+```python
+system = graph.calling("os.system")[0]
+[(n.source_text, label) for n, label in graph.control_dependences(system)]
+# [('cmd', 'true')]
+[n.source_text for n in graph.control_dependents(graph.by_text("cmd", exact=True)[0])]
+# ['os.system(cmd)', 'cmd = "true"']
+[n.source_text for n in graph.backward_slice(system)]
+# ['handler', 'name = request.args.get("name")', 'cmd = build(name)', 'os.system(cmd)']
+[n.source_text for n in graph.backward_slice(system, control=True)]
+# ['handler', 'name = request.args.get("name")', 'cmd = build(name)', 'cmd', 'os.system(cmd)']
+reset = graph.by_text('cmd = "true"')[0]
+[n.source_text for n in graph.backward_slice(reset, control=True)]
+# ['handler', 'name = request.args.get("name")', 'cmd = build(name)', 'cmd', 'cmd = "true"']
+```
+
+`cmd = "true"` reads nothing, so its data slice is itself; with `control=True` it gets the condition that decides it and everything the condition depends on. A forward slice with `control=True` adds what runs or not depending on a node in it.
+
+Check:
+- dependence comes from post-dominators per function (call and return edges are not part of a function's flow), so it follows the CFG's edges for every construct: `if`/`elif`, loops (a loop header depends on its own condition, or on the condition whose edge leads back to it), `match` (each case on the one before it), C and Java `switch` (labels are the case values; a fall-through case depends on every label that reaches it);
+- an early `return` makes what follows depend on the condition that did not return;
+- exceptions: the CFG sends the exception edge from the node before a statement that may raise, so inside a `try` a statement depends on its predecessor's normal edge (label `flow`), and what follows a `finally` depends on the `finally` (it may re-raise); labels say which edge, so these can be told apart from conditions;
+- a node that cannot reach its function's exit (a loop that never ends) has no post-dominator; dependence inside such a loop is still computed, on its own condition.
+
 #### Paths as data
 
 Every path is a `Path` of `PathStep`s: the node, its type and text, the kind of the edge that arrives at it, and the variable a data-flow edge carries. Paths are frozen, hashable and compare by value, so tests can assert on them; `path.nodes`, `path.edges` and `path.texts` give the parts, `str(path)` is the terminal form above, and `path.to_dict()` is JSON-compatible:
@@ -892,7 +919,7 @@ data = input() -> cmd = "ls " + data -> eval(cmd)
 Check, and what is approximate:
 - the data-flow model is statement-level, like the def-use chains: every variable a statement uses flows into every variable it defines (`cmd = build(name)` makes `cmd` depend on `build` as well as `name`). Extra edges are the exception: they follow the variable they name;
 - flow queries follow call and return edges like any other edge, and a path need not return to the call site it entered from. Pass `exclude=CALL_KINDS` to stay inside one function. Calls are linked by name, so `obj.f()` reaches every function named `f`;
-- slices and data-flow paths do not cross calls unless you pass `extra_edges` (`graph.interprocedural_edges()` for all calls in the file); they have no control dependence (nodes that only decide whether another runs are not included);
+- slices and data-flow paths do not cross calls unless you pass `extra_edges` (`graph.interprocedural_edges()` for all calls in the file); they have no control dependence unless you pass `control=True` (see [Control dependence](#control-dependence));
 - a weak update (`d["k"] = v`, `obj.f = v`) defines and uses the root name, so a path continues through it, as in the def-use chains;
 - `paths` and `data_flow_paths` are depth first, cut off at `max_paths`, and `shortest_path` breaks ties toward lower node ids; none of them knows whether a path is feasible.
 
@@ -982,9 +1009,37 @@ How taint moves:
 - between statements, def-use chains (so a reassignment on every path kills the taint) and the flows of [Data flow between functions](#data-flow-between-functions): arguments into parameters, returns into callers, closures and globals;
 - each source occurrence is followed on its own, so each finding has one source; a sink argument reached from one source by several paths is one finding, with the first path found.
 
+Two options make the analysis more precise, at some cost to soundness or speed; both are off by default:
+
+- `implicit_flows=True`: when a condition, loop header or `match`/`switch` reads a tainted value, what is defined or returned in the code it decides is tainted too, through nested branches (edge kind `control` in the path). `if x == "a": cmd = "safe"` taints `cmd`. Exceptions are not implicit flows, and a sink argument is not tainted by the branch around it (only definitions and returns are).
+- `field_sensitive=True`: a write into a field or a constant key taints only that field (`.secret`, `["k"]`), reads of other fields stay clean, and earlier fields are kept across writes to others. A read of the whole value (`system(d)`, `e = d`) is tainted when any field is and gives a value tainted as a whole; a variable passed as-is to a function defined in the file (including `self` to a method) keeps its fields there. Keys that are not literals read or write the whole value, and only the first level is tracked (`self.items[0] = x` taints `self.items`).
+
+```python
+from tree_climber.taint import Rule, Sink, Source
+
+rule = Rule("r", sources=[Source(call="input")], sinks=[Sink(call="system")])
+code = '''
+d = {}
+d["k"] = input()
+d["other"] = "safe"
+system(d["other"])
+system(d["k"])
+'''
+for finding in analyze_source("python", code.lstrip(), rule, field_sensitive=True):
+    print(finding.path)
+```
+
+```
+[3] d["k"] = input()
+  --def_use d[k]--> [4] d["other"] = "safe"
+  --def_use d[k]--> [6] system(d["k"])
+```
+
+Without the option, both `system` calls are reported.
+
 Check, and what is approximate:
-- over-approximations: unknown calls pass taint through; a container or object is one value (`d["k"] = tainted` taints `d`, `self.x = tainted` taints `self`); closures and globals are flow-insensitive; calls are resolved by name, and a function is analysed once for all its callers: with `def wrap(a): return a`, `t = wrap(input())` makes every `wrap(...)` result tainted, so `system(wrap("safe"))` is reported too;
-- under-approximations: aliasing (two names for one object), output parameters (C's `fgets(buf, ...)` or `snprintf(cmd, ...)` do not taint `buf` or `cmd`), dynamic features (`getattr`, `exec` of strings), calls through function pointers, and branching on tainted data (implicit flows, #49);
+- over-approximations: unknown calls pass taint through; a container or object is one value unless `field_sensitive` (`d["k"] = tainted` taints `d`, `self.x = tainted` taints `self`); closures and globals are flow-insensitive; calls are resolved by name, and a function is analysed once for all its callers: with `def wrap(a): return a`, `t = wrap(input())` makes every `wrap(...)` result tainted, so `system(wrap("safe"))` is reported too;
+- under-approximations: aliasing (two names for one object), output parameters (C's `fgets(buf, ...)` or `snprintf(cmd, ...)` do not taint `buf` or `cmd`), dynamic features (`getattr`, `exec` of strings), calls through function pointers, and branching on tainted data unless `implicit_flows`; Java writes into fields and arrays define nothing in the CFG (#32), so taint written there is lost with or without `field_sensitive`;
 - attribute sources are matched as text in the statement, outside string literals and comments.
 
 ## 4. HTTP API

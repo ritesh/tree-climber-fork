@@ -191,3 +191,36 @@ def test_interprocedural_edges(graph):
         "  --argument value--> [12] ENTRY finish\n"
         "  --def_use value--> [14] return value"
     )
+
+
+def test_control_dependence(graph):
+    system = graph.calling("os.system")[0]
+    reset = graph.by_text('cmd = "true"')[0]
+
+    assert [
+        (n.source_text, label) for n, label in graph.control_dependences(system)
+    ] == [("cmd", "true")]
+    assert texts(graph.control_dependents(graph.by_text("cmd", exact=True)[0])) == [
+        "os.system(cmd)",
+        'cmd = "true"',
+    ]
+    assert texts(graph.backward_slice(system)) == [
+        "handler",
+        'name = request.args.get("name")',
+        "cmd = build(name)",
+        "os.system(cmd)",
+    ]
+    assert texts(graph.backward_slice(system, control=True)) == [
+        "handler",
+        'name = request.args.get("name")',
+        "cmd = build(name)",
+        "cmd",
+        "os.system(cmd)",
+    ]
+    assert texts(graph.backward_slice(reset, control=True)) == [
+        "handler",
+        'name = request.args.get("name")',
+        "cmd = build(name)",
+        "cmd",
+        'cmd = "true"',
+    ]
