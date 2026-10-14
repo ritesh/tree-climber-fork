@@ -37,11 +37,14 @@ from tree_climber.dataflow.analyses.reaching_definitions import (
 )
 from tree_climber.dataflow.interprocedural import analyze_interprocedural
 from tree_climber.dataflow.solver import RoundRobinSolver
-from tree_climber.query.edges import ARGUMENT, DEF_USE, FREE_VARIABLE, RETURN
+from tree_climber.dataflow.control_dependence import control_dependence
+from tree_climber.query.edges import ARGUMENT, CONTROL, DEF_USE, FREE_VARIABLE, RETURN
 from tree_climber.query.path import Path, PathStep
+from tree_climber.taint.fields import Accesses, accesses
 from tree_climber.taint.rules import Rule, RuleSet, Source, call_matches
 
 RECEIVER = -1
+PREDICATES = (NodeType.CONDITION, NodeType.LOOP_HEADER, NodeType.SWITCH_HEAD)
 
 Value = Tuple[Any, ...]
 Step = Tuple[Value, Optional[str], Optional[str]]
@@ -84,9 +87,25 @@ class _Program:
     """What every run over one CFG shares: def-use chains, interprocedural flows,
     and the shape of each node's calls."""
 
-    def __init__(self, cfg: CFG):
+    def __init__(
+        self, cfg: CFG, implicit_flows: bool = False, field_sensitive: bool = False
+    ):
         self.cfg = cfg
+        self.field_sensitive = field_sensitive
         self._code: Dict[int, bytes] = {}
+        self._accesses: Dict[int, Accesses] = {}
+        self.governed: Dict[int, List[int]] = {}
+        self.cases: Dict[int, List[int]] = {}
+        if implicit_flows:
+            self.cases = _match_cases(cfg)
+            dependence = control_dependence(cfg)
+            for node_id, controllers in dependence.controllers.items():
+                for branch, label in controllers:
+                    if (
+                        cfg.nodes[branch].node_type in PREDICATES
+                        and label != "exception"
+                    ):
+                        self.governed.setdefault(branch, []).append(node_id)
         reaching = RoundRobinSolver().solve(cfg, ReachingDefinitionsProblem())
         self.def_use: Dict[Tuple[int, str], List[int]] = {}
         for chains in DefUseSolver().solve(cfg, reaching).chains.values():
@@ -120,6 +139,13 @@ class _Program:
                 kinds = functions.get(site.callee or "", [])
                 if kinds and not all(kinds):
                     self.defined.add((node_id, index))
+
+    def accesses(self, node: CFGNode) -> Accesses:
+        """The fields and keys the node reads and writes, computed once."""
+        if node.id not in self._accesses:
+            ast = node.ast_node
+            self._accesses[node.id] = accesses(ast) if ast is not None else Accesses()
+        return self._accesses[node.id]
 
     def code(self, node: CFGNode) -> bytes:
         """The node's text without string literals and comments, computed once."""
@@ -226,8 +252,10 @@ class _Run:
         self.rule = rule
         self.origin = origin
         self.pred: Dict[Value, Optional[Step]] = {}
-        self.uses_in: Dict[int, Dict[str, Value]] = {}
+        self.uses_in: Dict[int, Dict[str, Dict[Optional[str], Value]]] = {}
         self.results_in: Dict[Tuple[int, int], Value] = {}
+        self.control_in: Dict[int, Value] = {}
+        self.subject_in: Dict[int, Value] = {}
         self.queue: Deque[int] = deque()
         self.queued: Set[int] = set()
         self.findings: Dict[Tuple[int, int, int], Value] = {}
@@ -261,19 +289,25 @@ class _Run:
             self.evaluate(node)
         return self.findings
 
-    def define(self, node: int, variable: str, step: Step) -> None:
-        value = ("def", node, variable)
+    def define(
+        self, node: int, variable: str, step: Step, tag: Optional[str] = None
+    ) -> None:
+        value = ("def", node, variable, tag)
         if not self.mark(value, step):
             return
+        shown = variable + tag if tag else variable
         for use in self.program.def_use.get((node, variable), []):
-            self.use(use, variable, (value, DEF_USE, variable))
+            self.use(use, variable, (value, DEF_USE, shown), tag)
         for use in self.program.free.get((node, variable), []):
-            self.use(use, variable, (value, FREE_VARIABLE, variable))
+            self.use(use, variable, (value, FREE_VARIABLE, shown), tag)
 
-    def use(self, node: int, variable: str, step: Step) -> None:
-        value = ("use", node, variable)
+    def use(
+        self, node: int, variable: str, step: Step, tag: Optional[str] = None
+    ) -> None:
+        value = ("use", node, variable, tag)
         if self.mark(value, step):
-            self.uses_in.setdefault(node, {})[variable] = value
+            tags = self.uses_in.setdefault(node, {}).setdefault(variable, {})
+            tags[tag] = value
             self.enqueue(node)
 
     def evaluate(self, n: int) -> None:
@@ -282,11 +316,30 @@ class _Run:
         sites = metadata.call_sites
         tainted = self.uses_in.get(n, {})
         here = n == self.origin.node
+        fields = self.program.accesses(node) if self.program.field_sensitive else None
+
+        def readable(name: str) -> Optional[Value]:
+            tags = tainted.get(name)
+            if not tags:
+                return None
+            whole = tags.get(None) or tags[min(t for t in tags if t is not None)]
+            if fields is None or None in tags:
+                return whole
+            reads = fields.reads.get(name)
+            if reads is None:
+                reads = set() if name in fields.writes else {None}
+            if None in reads:
+                return whole
+            for tag in sorted(t for t in reads if t is not None):
+                if tag in tags:
+                    return tags[tag]
+            return None
 
         def direct(names: Optional[Iterable[str]]) -> Optional[Value]:
             for name in metadata.variable_uses if names is None else names:
-                if name in tainted:
-                    return tainted[name]
+                found = readable(name)
+                if found is not None:
+                    return found
             return None
 
         def from_attribute(region: Region) -> Optional[Value]:
@@ -339,19 +392,48 @@ class _Run:
                 result[s] = value
 
         top = [s for s, site in enumerate(sites) if site.feeds is None]
+        control = self.control_in.get(n)
         statement = (
             direct(metadata.direct_uses)
             or next((result[s] for s in top if s in result), None)
             or from_attribute(("statement",))
+            or control
+            or self.subject_in.get(n)
         )
+        if statement is not None:
+            for case in self.program.cases.get(n, []):
+                if case not in self.subject_in:
+                    self.subject_in[case] = statement
+                    self.enqueue(case)
+        if statement is not None and n in self.program.governed:
+            branch = ("branch", n)
+            self.mark(branch, (statement, None, None))
+            for governed in self.program.governed[n]:
+                value = ("control", governed)
+                if self.mark(value, (branch, CONTROL, None)):
+                    self.control_in[governed] = value
+                    self.enqueue(governed)
 
         assigned: Dict[str, int] = {}
         for s in top:
             for variable in sites[s].assigned_to:
                 assigned.setdefault(variable, s)
         for variable in metadata.variable_definitions:
+            if fields is not None and variable in fields.writes:
+                found = (
+                    result.get(assigned[variable]) or control
+                    if variable in assigned
+                    else statement
+                )
+                if found is not None:
+                    self.define(
+                        n, variable, (found, None, None), fields.writes[variable]
+                    )
+                for tag, earlier in tainted.get(variable, {}).items():
+                    self.define(n, variable, (earlier, None, None), tag)
+                continue
             if variable in assigned:
-                found = result.get(assigned[variable])
+                found = result.get(assigned[variable]) or control
                 if found is None and (
                     metadata.direct_uses is None or variable in metadata.direct_uses
                 ):
@@ -371,8 +453,15 @@ class _Run:
                     self.enqueue(call[0])
 
         for (s, i), value in argument.items():
+            bare = _bare_variable(sites[s], i) if fields is not None else None
             for entry, parameter in self.program.arguments.get((n, s, i), []):
-                self.define(entry, parameter, (value, ARGUMENT, parameter))
+                if bare is not None and bare in tainted:
+                    for tag, earlier in tainted[bare].items():
+                        self.define(
+                            entry, parameter, (earlier, ARGUMENT, parameter), tag
+                        )
+                else:
+                    self.define(entry, parameter, (value, ARGUMENT, parameter))
             if i == RECEIVER:
                 continue
             site = sites[s]
@@ -419,6 +508,23 @@ class _Run:
             if kind is not None:
                 steps.append(PathStep.of(self.cfg.nodes[reached[1]], kind, variable))
         return Path(tuple(steps))
+
+
+def _bare_variable(site: CallSite, index: int) -> Optional[str]:
+    """The variable an argument or receiver is, when it is nothing else."""
+    text = site.receiver if index == RECEIVER else site.arguments[index].text
+    return text if text is not None and text.isidentifier() else None
+
+
+def _match_cases(cfg: CFG) -> Dict[int, List[int]]:
+    """The first case of each switch head that has one successor (Python `match`):
+    it decides on the head's subject, which it does not read. Later cases depend
+    on the earlier ones' `false` edges."""
+    cases: Dict[int, List[int]] = {}
+    for node_id, node in cfg.nodes.items():
+        if node.node_type == NodeType.SWITCH_HEAD and len(node.successors) == 1:
+            cases[node_id] = list(node.successors)
+    return cases
 
 
 def _origins(program: _Program, rule: Rule) -> List[_Origin]:
@@ -470,10 +576,19 @@ def _rules(rules: Rules, language: Optional[str]) -> List[Rule]:
     return [rule for rule in rules if rule.applies_to(language)]
 
 
-def analyze(cfg: CFG, rules: Rules, language: Optional[str] = None) -> List[Finding]:
+def analyze(
+    cfg: CFG,
+    rules: Rules,
+    language: Optional[str] = None,
+    implicit_flows: bool = False,
+    field_sensitive: bool = False,
+) -> List[Finding]:
     """Findings of the rules on a CFG, ordered by rule, source, sink and argument.
-    `language` filters out rules for other languages."""
-    program = _Program(cfg)
+    `language` filters out rules for other languages. With `implicit_flows`, a
+    branch on a tainted value taints what is defined or returned in the code it
+    decides on. With `field_sensitive`, a write into a field or constant key
+    taints only that field, and reads of other fields stay clean."""
+    program = _Program(cfg, implicit_flows, field_sensitive)
     findings: Dict[Tuple[str, int, int, int, int], Finding] = {}
     for rule in _rules(rules, language):
         for origin in _origins(program, rule):
@@ -488,7 +603,14 @@ def analyze(cfg: CFG, rules: Rules, language: Optional[str] = None) -> List[Find
     return [findings[key] for key in sorted(findings)]
 
 
-def analyze_source(language: str, source: str, rules: Rules) -> List[Finding]:
+def analyze_source(
+    language: str,
+    source: str,
+    rules: Rules,
+    implicit_flows: bool = False,
+    field_sensitive: bool = False,
+) -> List[Finding]:
     builder = CFGBuilder(language)
     builder.setup_parser()
-    return analyze(builder.build_cfg(source), rules, language)
+    cfg = builder.build_cfg(source)
+    return analyze(cfg, rules, language, implicit_flows, field_sensitive)

@@ -15,6 +15,7 @@ DEF_USE = "def_use"
 ARGUMENT = "argument"
 RETURN = "return"
 FREE_VARIABLE = "free_variable"
+CONTROL = "control"
 
 CALL_KINDS: Tuple[str, str] = (FUNCTION_CALL, FUNCTION_RETURN)
 

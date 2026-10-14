@@ -1,6 +1,7 @@
 from tree_climber.query.edges import (
     ARGUMENT,
     CALL_KINDS,
+    CONTROL,
     DEF_USE,
     EXCEPTION,
     FALSE,
@@ -19,6 +20,7 @@ from tree_climber.query.path import Path, PathStep
 __all__ = [
     "ARGUMENT",
     "CALL_KINDS",
+    "CONTROL",
     "DEF_USE",
     "EXCEPTION",
     "FALSE",

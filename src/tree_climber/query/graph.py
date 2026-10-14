@@ -22,6 +22,10 @@ from tree_climber.dataflow.analyses.reaching_definitions import (
     ReachingDefinitionsProblem,
 )
 from tree_climber.dataflow.analyses.use_def import UseDefResult, UseDefSolver
+from tree_climber.dataflow.control_dependence import (
+    ControlDependence,
+    control_dependence,
+)
 from tree_climber.dataflow.solver import RoundRobinSolver
 from tree_climber.query.edges import (
     CALL_KINDS,
@@ -431,31 +435,82 @@ class CodeGraph:
                 ordered.append(edge)
         return ordered
 
+    @cached_property
+    def _control(self) -> ControlDependence:
+        return control_dependence(self.cfg)
+
+    def control_dependences(self, ref: NodeRef) -> List[Tuple[CFGNode, str]]:
+        """The branches that decide whether the node runs, each with the label of
+        the edge that makes it run (`true`, `false`, a case value, `exception`,
+        or `flow`)."""
+        return [
+            (self.cfg.nodes[branch], label)
+            for branch, label in self._control.controllers.get(self._id(ref), [])
+        ]
+
+    def control_dependents(self, ref: NodeRef) -> List[CFGNode]:
+        """The nodes whose running the node decides."""
+        return self._sorted(self._control.dependents.get(self._id(ref), []))
+
     def forward_slice(
         self,
         ref: NodeRef,
         variable: Optional[str] = None,
         extra_edges: ExtraEdges = None,
+        control: bool = False,
     ) -> List[CFGNode]:
         """The node and every node whose value depends on it: what it defines
         flows to uses, and a node's uses flow to what it defines. With
-        `variable`, only that variable's flow from the node is followed."""
+        `variable`, only that variable's flow from the node is followed. With
+        `control`, also what runs or not depending on a node in the slice."""
         graph = self._fact_graph(extra_edges)
         node_id = self._id(ref)
         reached = graph.reach(graph.seeds(node_id, variable), graph.forward)
-        return self._sorted({fact.node for fact in reached} | {node_id})
+        nodes = {fact.node for fact in reached} | {node_id}
+        if control:
+            nodes = self._close_over_control(graph, nodes, forward=True)
+        return self._sorted(nodes)
 
     def backward_slice(
         self,
         ref: NodeRef,
         variable: Optional[str] = None,
         extra_edges: ExtraEdges = None,
+        control: bool = False,
     ) -> List[CFGNode]:
-        """The node and every node it depends on."""
+        """The node and every node it depends on. With `control`, also the
+        branches that decide whether a node in the slice runs, and what they
+        depend on."""
         graph = self._fact_graph(extra_edges)
         node_id = self._id(ref)
         reached = graph.reach(graph.seeds(node_id, variable), graph.backward)
-        return self._sorted({fact.node for fact in reached} | {node_id})
+        nodes = {fact.node for fact in reached} | {node_id}
+        if control:
+            nodes = self._close_over_control(graph, nodes, forward=False)
+        return self._sorted(nodes)
+
+    def _close_over_control(
+        self, graph: FactGraph, nodes: Set[int], forward: bool
+    ) -> Set[int]:
+        moves = graph.forward if forward else graph.backward
+        result = set(nodes)
+        pending = list(nodes)
+        while pending:
+            node_id = pending.pop()
+            if forward:
+                linked = self._control.dependents.get(node_id, [])
+            else:
+                linked = [b for b, _ in self._control.controllers.get(node_id, [])]
+            for other in linked:
+                if other in result:
+                    continue
+                result.add(other)
+                pending.append(other)
+                for fact in graph.reach(graph.seeds(other), moves):
+                    if fact.node not in result:
+                        result.add(fact.node)
+                        pending.append(fact.node)
+        return result
 
     def _route_path(self, start: int, route: Route) -> Path:
         steps = [PathStep.of(self.cfg.nodes[start])]
