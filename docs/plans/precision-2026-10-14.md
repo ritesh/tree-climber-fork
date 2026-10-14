@@ -38,13 +38,14 @@ Executive summary: control dependence is computed from post-dominators for Pytho
 - **Tests**:
   - `test/test_control_dependence.py` (14): if/else and nesting, early return, while, for/else/break, `match`, `try`/`finally`, a loop that never exits, recursion, calls, C `switch` with fall-through, `do`/`while`, Java `switch` and `for`.
   - `test/query/test_query_control.py` (15): dependences and dependents in all three languages, slices with and without `control`, transitivity through nested branches and through a condition's own data.
-  - `test/taint/test_taint_precision.py` (32), each option off and on: implicit flows through if, nested ifs, loops, `match` (including a later case), returns, C `switch` and Java `if`, and what they must not do (code after the branch, exceptions, sink arguments). Field sensitivity on keys, attributes, quote styles, non-constant keys, copies, whole taint, kept tags, deeper writes, `self` into methods, bare arguments, C structs, Java reads, and both options together.
+  - `test/taint/test_taint_precision.py` (35), each option off and on: implicit flows through if, nested ifs, loops, `match` (including a later case), returns, C `switch` and Java `if`, and what they must not do (code after the branch, exceptions, sink arguments). Field sensitivity on keys, attributes, quote styles, non-constant keys, copies, whole taint, kept tags, deeper writes, `self` into methods, bare arguments, C structs, Java reads, and both options together.
   - `test/taint/test_taint_fields.py` (27): the access extractor on each statement form in each language.
   - The guide's examples are pinned in `test_query_guide.py` and `test_taint_precision.py`.
 - **Mutation-checked**:
-  - Over the run, 60 deliberate bugs across `control_dependence.py`, the query slices, the engine options and `fields.py`.
-  - The first run left 20 alive (3 patterns did not apply and were rewritten). New tests killed 15 of them.
-  - The survivors also exposed code that does nothing, which was removed: a redundant reachability check, a sort of lists that are already in order, and a guard on the first `match` case. The `match` case chain was replaced by seeding only the first case, since later cases depend on the earlier ones' `false` edges.
+  - Over the run, 61 deliberate bugs across `control_dependence.py`, the query slices, the engine options and `fields.py`.
+  - The first run applied 54: 34 were caught and 20 survived. The 3 that did not apply were rewritten, and all 3 are caught.
+  - Of the 20 survivors, new tests catch 12. Two pointed at code that does nothing (a redundant reachability check, a sort of lists already in order), which was removed. Two were in the `match` case chain, replaced by seeding only the first case, since later cases depend on the earlier ones' `false` edges. Four are equivalent.
+  - The replacement got its own 3 mutants plus one for the bare compound read: two are caught, one exposed a dead guard (removed), and one is equivalent.
   - On the final code, 5 mutants are equivalent: dropping the same-function check on successors (only call edges leave a function), the exit's own post-dominator, allowing several exits (a function has one), skipping single-successor nodes (an optimization), and seeding a C/Java switch head (it branches itself, so control dependence already covers it). Every other mutant is caught.
 - **Standard library** with the Python example rules (1,081 files, no errors in any configuration):
   - default: 45 findings in 43.6 s;
