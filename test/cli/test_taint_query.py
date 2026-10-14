@@ -30,7 +30,7 @@ from tree_climber.query import PathStep
 from tree_climber.taint import analyze, builtin_rules
 from tree_climber.viz.app import TaintRequest, taint_source_code
 
-runner = CliRunner()
+runner = CliRunner(env={"NO_COLOR": "1", "TERM": "dumb", "COLUMNS": "200"})
 
 APP = """\
 import os
