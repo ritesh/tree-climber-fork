@@ -25,7 +25,7 @@ Run `tree-climber --list-languages` to see what your install supports.
 - **Dataflow Solver**: Implements iterative dataflow analysis algorithms
 - **AST Utils**: Tree-sitter integration and AST manipulation utilities
 - **Query**: `tree_climber.query` answers questions about the graphs (lookup, successors and paths, def-use, slices, networkx export) without hand-written traversals; see the [Python guide](./docs/python-guide.md#querying-the-graph)
-- **Taint analysis**: `tree_climber.taint` traces untrusted input from sources to sinks across calls, with call-site sanitizers, argument positions, JSON rules and example rule sets; see the [Python guide](./docs/python-guide.md#taint-analysis)
+- **Taint analysis**: `tree_climber.taint` traces untrusted input from sources to sinks across calls, with call-site sanitizers, argument positions, JSON rules and example rule sets; see the [taint analysis guide](./docs/taint-guide.md) for worked examples in Python, C and Java, and the [Python guide](./docs/python-guide.md#taint-analysis) for the reference
 - **Visualization**: Web-based interactive CFG visualization
 
 ### Analysis Capabilities
@@ -96,7 +96,7 @@ Options also accept underscores (`--draw_cfg`), for compatibility with earlier v
 
 Graphs are saved as PNG files next to the input, or in the directory given with `-o`.
 
-Two commands answer questions as text: `tree-climber taint app.py` traces untrusted input to dangerous calls and prints each finding with its path (`--rules rules.json` for your own rules, `--json`, and `--draw-cfg`/`--draw-dfg` to draw a finding's path), and `tree-climber query app.py --calls system` or `--slice-from 12` lists the callers of a function or a slice from a line. See [Tracing user input](./docs/python-guide.md#tracing-user-input).
+Two commands answer questions as text: `tree-climber taint app.py` traces untrusted input to dangerous calls and prints each finding with its path (`--rules rules.json` for your own rules, `--json`, and `--draw-cfg`/`--draw-dfg` to draw a finding's path), and `tree-climber query app.py --calls system` or `--slice-from 12` lists the callers of a function or a slice from a line. See the [taint analysis guide](./docs/taint-guide.md) and [Tracing user input](./docs/python-guide.md#tracing-user-input).
 
 ### Web Application
 
@@ -202,5 +202,6 @@ uv run pytest
 ## Documentation
 
 - [Python guide](./docs/python-guide.md): what is modeled and how to exercise it
+- [Taint analysis guide](./docs/taint-guide.md): running taint analysis on Python, C and Java, with rules of your own
 - [Extending languages](./docs/plans/extending-languages.md): adding a language, and per-language limitations
 - `docs/plans/`: design plans and results for each piece of work

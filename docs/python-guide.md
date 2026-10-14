@@ -925,7 +925,7 @@ Check, and what is approximate:
 
 ### Taint analysis
 
-`tree_climber.taint` is the analysis the query-layer tracker above sketches, at the level of call sites: a sanitizer cleans the value it returns, not the whole statement (`eval(escape(x))` and `cmd = "ls " + escape(x)` are clean), a sink watches particular arguments, sources can be calls, parameters or attributes, and taint follows calls into functions and back. It works for Python, C and Java.
+`tree_climber.taint` is the analysis the query-layer tracker above sketches, at the level of call sites: a sanitizer cleans the value it returns, not the whole statement (`eval(escape(x))` and `cmd = "ls " + escape(x)` are clean), a sink watches particular arguments, sources can be calls, parameters or attributes, and taint follows calls into functions and back. It works for Python, C and Java. The [taint analysis guide](./taint-guide.md) walks through running it on examples in all three; this section is the reference.
 
 ```python
 from tree_climber.taint import analyze_source, builtin_rules
