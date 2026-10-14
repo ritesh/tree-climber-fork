@@ -326,10 +326,49 @@ class CCFGVisitor(CFGVisitor):
                     names.append(get_source_text(name))
         return names
 
+    @classmethod
+    def _inner_declarator(cls, node: Node) -> Optional[Node]:
+        if node.type in cls.DECLARATOR_WRAPPERS:
+            return cls._wrapped_declarator(node)
+        if node.type == "attributed_declarator" and node.named_children:
+            return node.named_children[0]
+        return None
+
+    @classmethod
+    def _function_declarator(cls, declarator: Node) -> Node:
+        """The declarator of the function itself, the innermost function
+        declarator: `f(...)` in `int *f(...)` and in `int (*f(int x))(int)`, where
+        the outer `(int)` belongs to the returned function pointer."""
+        found: Optional[Node] = None
+        node: Optional[Node] = declarator
+        while node is not None:
+            if node.type == "function_declarator":
+                found = node
+            node = cls._inner_declarator(node)
+        if found is None:
+            raise ValueError(
+                f"No function declarator in {get_source_text(declarator)!r}"
+            )
+        return found
+
+    @classmethod
+    def _function_name(cls, function_declarator: Node) -> Node:
+        """The name in a function declarator, through `(f)` and `f [[attr]]`."""
+        node = function_declarator.child_by_field_name("declarator")
+        while node is not None and node.type != "identifier":
+            node = cls._inner_declarator(node)
+        if node is None:
+            raise ValueError(
+                f"No function name in {get_source_text(function_declarator)!r}"
+            )
+        return node
+
     def visit_function_definition(self, node: Node) -> CFGTraversalResult:
         """Visit a function definition"""
         # Get components via named fields
-        declarator = get_required_child_by_field_name(node, "declarator")
+        declarator = self._function_declarator(
+            get_required_child_by_field_name(node, "declarator")
+        )
         body_node = get_required_child_by_field_name(node, "body")
 
         # Extract function name and parameters from the declarator
@@ -338,8 +377,7 @@ class CCFGVisitor(CFGVisitor):
         closing_brace = None
 
         # Look for identifier (function name) and parameter_list in declarator
-        function_identifier = get_required_child_by_field_name(declarator, "declarator")
-        function_name = get_source_text(function_identifier)
+        function_name = get_source_text(self._function_name(declarator))
         parameter_list = get_required_child_by_field_name(declarator, "parameters")
         parameter_infos: List[ParameterInfo] = []
         for param in parameter_list.children:
