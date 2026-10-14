@@ -17,12 +17,15 @@ from .constants import (
 class DFGVisualizer(BaseVisualizer):
     @override
     def visualize(self):
-        options = self.options
-        cfg = self.cfg
-        duc_edges = self.duc_edges
-        if not options.draw_dfg:
+        if not self.options.draw_dfg:
             return
 
+        self.graph().draw(str(self.output_path("dfg")), prog="dot")
+        print(f"Saved DFG visualization: {self.output_path('dfg')}")
+
+    def graph(self) -> pgv.AGraph:
+        cfg = self.cfg
+        duc_edges = self.duc_edges
         if cfg is None:
             raise ValueError("CFG required to draw DFG")
         if duc_edges is None:
@@ -48,5 +51,4 @@ class DFGVisualizer(BaseVisualizer):
         for (src, dst), names in duc_edges.items():
             dfg_label = ", ".join(sorted(names))
             add_dfg_edge(G_dfg, src, dst, dfg_label)
-        G_dfg.draw(str(self.output_path("dfg")), prog="dot")
-        print(f"Saved DFG visualization: {self.output_path('dfg')}")
+        return G_dfg

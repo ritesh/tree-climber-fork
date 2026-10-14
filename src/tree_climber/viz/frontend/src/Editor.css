@@ -4,3 +4,11 @@
   z-index: 10 !important;
   position: relative;
 }
+
+.taint-path-step {
+  background-color: rgba(255, 152, 0, 0.3);
+}
+
+.taint-path-end {
+  background-color: rgba(230, 81, 0, 0.55);
+}

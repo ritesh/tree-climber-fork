@@ -1,0 +1,42 @@
+.findings {
+  border: 1px solid #333;
+  border-radius: 8px;
+  padding: 1em 2em;
+  margin: 0 1em 1em;
+  text-align: left;
+}
+
+.findings h3 {
+  margin: 0 0 0.5em;
+}
+
+.findings-note {
+  font-weight: normal;
+  font-size: 0.8em;
+  opacity: 0.7;
+}
+
+.findings-list {
+  margin: 0;
+  padding-left: 1.5em;
+}
+
+.findings-list > li {
+  margin-bottom: 0.5em;
+}
+
+.finding {
+  padding: 0.3em 0.8em;
+  text-align: left;
+}
+
+.finding-selected {
+  border-color: #E65100;
+  background-color: rgba(255, 152, 0, 0.25);
+}
+
+.finding-path {
+  margin: 0.4em 0 0;
+  font-family: 'Fira Mono', 'Consolas', 'Menlo', 'Monaco', monospace;
+  font-size: 0.85em;
+}

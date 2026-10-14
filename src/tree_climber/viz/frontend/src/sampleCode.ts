@@ -23,11 +23,23 @@ public class Example {
 }
 `,
   python: `# Example code
+import os
+
+
 def count(a):
     if a > 10:
         for i in range(10):
             a += 1
     return a
+
+
+def ping():
+    host = input()
+    run("ping -c 1 " + host)
+
+
+def run(command):
+    os.system(command)
 `,
 };
 

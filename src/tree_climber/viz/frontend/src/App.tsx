@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
 import Editor from './Editor'
 import Graph from './Graph'
+import Findings from './Findings'
 import {LanguageSelector, loadLanguage} from './LanguageSelector'
 import { GraphProvider } from './GraphContext'
 import { loadCode } from './sampleCode'
@@ -44,6 +45,7 @@ function App() {
         <Editor language={language} onTextChange={handleCodeChange} />
         <Graph ref={graphRef} />
       </div>
+      <Findings />
     </GraphProvider>
   )
 }

@@ -12,9 +12,13 @@ from pydantic import ValidationError
 from tree_climber.language_registry import DEFAULT_LANGUAGE, SUPPORTED_LANGUAGES
 from tree_climber.viz.app import (
     ParseRequest,
+    QueryRequest,
+    TaintRequest,
     health_check,
     parse_source_code,
+    query_source_code,
     root,
+    taint_source_code,
 )
 
 C_SOURCE = """
@@ -88,3 +92,180 @@ def test_language_defaults_to_registry_default():
     request = ParseRequest.model_validate({"source_code": C_SOURCE})
 
     assert request.language == DEFAULT_LANGUAGE
+
+
+TAINTED = """\
+import os
+
+
+def handler():
+    name = input()
+    run(name)
+
+
+def run(command):
+    os.system(command)
+"""
+
+
+def taint(**body):
+    request = TaintRequest.model_validate({"language": "python", **body})
+    return asyncio.run(taint_source_code(request))
+
+
+def query(**body):
+    request = QueryRequest.model_validate({"language": "python", **body})
+    return asyncio.run(query_source_code(request))
+
+
+def test_root_lists_the_new_endpoints():
+    assert {"/taint", "/query"} <= set(asyncio.run(root())["endpoints"])
+
+
+def test_taint_with_the_builtin_rules():
+    response = taint(source_code=TAINTED)
+
+    assert response.success, response.error
+    assert [f["rule"] for f in response.findings] == ["python-command-injection"]
+    finding = response.findings[0]
+    assert finding["sink_call"] == "os.system"
+    assert [step["edge"] for step in finding["path"]["steps"]] == [
+        None,
+        "def_use",
+        "argument",
+        "def_use",
+    ]
+
+
+def test_taint_node_ids_are_those_of_parse():
+    parsed = asyncio.run(
+        parse_source_code(
+            ParseRequest.model_validate({"source_code": TAINTED, "language": "python"})
+        )
+    )
+    assert parsed.cfg is not None
+
+    steps = taint(source_code=TAINTED).findings[0]["path"]["steps"]
+
+    for step in steps:
+        node = parsed.cfg["nodes"][step["node"]]
+        assert node["node_type"] == step["node_type"]
+        assert node["source_text"].splitlines()[0] == step["text"]
+        assert node["start_index"] is not None
+
+
+def test_taint_with_rules_in_the_request():
+    rules = {
+        "rules": [
+            {
+                "id": "run",
+                "sources": [{"call": "input"}],
+                "sinks": [{"call": "run"}],
+            }
+        ]
+    }
+
+    response = taint(source_code=TAINTED, rules=rules)
+
+    assert response.success, response.error
+    assert [(f["rule"], f["sink_call"]) for f in response.findings] == [("run", "run")]
+
+
+@pytest.mark.parametrize(
+    "rules, message",
+    [
+        ({"rules": [{"id": "x", "bad": 1}]}, "Unknown rule keys"),
+        ({"rules": [{"sinks": []}]}, "missing key 'id'"),
+        ({"rules": [{"id": "x", "languages": ["c"]}]}, "No rules for python"),
+    ],
+)
+def test_taint_with_bad_rules(rules, message):
+    response = taint(source_code=TAINTED, rules=rules)
+
+    assert not response.success
+    assert response.findings == []
+    assert response.error is not None and message in response.error
+
+
+def test_taint_without_findings():
+    response = taint(source_code="x = 1\n")
+
+    assert response.success
+    assert response.findings == []
+
+
+def test_taint_in_c():
+    source = 'int main() { char *c = getenv("C"); system(c); return 0; }\n'
+
+    response = taint(source_code=source, language="c")
+
+    assert [f["rule"] for f in response.findings] == ["c-command-injection"]
+
+
+def test_taint_language_is_validated():
+    with pytest.raises(ValidationError, match="Unsupported language: cobol"):
+        TaintRequest.model_validate({"source_code": "", "language": "cobol"})
+
+
+def test_query_calls():
+    response = query(source_code=TAINTED, kind="calls", names=["system"])
+
+    assert response.success, response.error
+    assert response.nodes == [
+        {
+            "node": 9,
+            "node_type": "STATEMENT",
+            "text": "os.system(command)",
+            "line": 10,
+            "function": "run",
+        }
+    ]
+
+
+def test_query_slices():
+    forward = query(source_code=TAINTED, kind="slice", line=5)
+    within = query(source_code=TAINTED, kind="slice", line=5, across_calls=False)
+    backward = query(source_code=TAINTED, kind="slice", line=10, backward=True)
+
+    assert [n["line"] for n in forward.nodes] == [5, 6, 9, 10]
+    assert [n["line"] for n in within.nodes] == [5, 6]
+    assert [n["text"] for n in backward.nodes] == [
+        "import os",
+        "name = input()",
+        "run(name)",
+        "run",
+        "os.system(command)",
+    ]
+
+
+def test_query_slice_of_one_variable():
+    source = "a, b = f()\nprint(a)\nprint(b)\n"
+
+    response = query(source_code=source, kind="slice", line=1, variable="a")
+
+    assert [n["text"] for n in response.nodes] == ["a, b = f()", "print(a)"]
+
+
+@pytest.mark.parametrize(
+    "body, message",
+    [
+        ({"kind": "calls"}, "needs names"),
+        ({"kind": "slice"}, "needs a line"),
+        ({"kind": "slice", "line": 3}, "No statement on line 3"),
+    ],
+)
+def test_query_errors(body, message):
+    response = query(source_code=TAINTED, **body)
+
+    assert not response.success
+    assert response.error is not None and message in response.error
+
+
+@pytest.mark.parametrize(
+    "body",
+    [{"kind": "callers"}, {"kind": "slice", "line": 0}, {}],
+    ids=["unknown kind", "line 0", "no kind"],
+)
+def test_query_request_is_validated(body):
+    with pytest.raises(ValidationError):
+        QueryRequest.model_validate({"source_code": TAINTED, **body})

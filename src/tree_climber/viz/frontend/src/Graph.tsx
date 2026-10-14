@@ -4,9 +4,9 @@ import cytoscapePopper from 'cytoscape-popper';
 import tippy from 'tippy.js';
 import dagre from 'cytoscape-dagre';
 import nodeHtmlLabel from 'cytoscape-node-html-label';
-import { useState, useRef, forwardRef, useImperativeHandle } from 'react';
+import { useState, useRef, useEffect, forwardRef, useImperativeHandle } from 'react';
 import { useGraph, setSelectGraphNodeCallback, notifyGraphNodeSelected } from './GraphContext';
-import type { GraphData, CFGData, DFGEdge, DFGData } from './GraphContext';
+import type { GraphData, CFGData, DFGEdge, DFGData, Finding } from './GraphContext';
 import './Graph.css';
 import 'tippy.js/dist/tippy.css';
 
@@ -35,6 +35,8 @@ cytoscape.use(cytoscapePopper(tippyFactory));
 // API endpoint URL
 const API_BASE_URL = 'http://localhost:8000';
 const DEF_USE_EDGES_KEY = 'tree_climber_show_def_use_edges';
+const PATH_COLOR = '#E65100';
+const LAYOUT_EXCLUDED_EDGES = ['DATA_DEPENDENCY', 'TAINT_STEP'];
 
 interface GraphRef {
   updateGraph: (code: string, language: string) => Promise<void>;
@@ -136,6 +138,29 @@ const CYTOSCAPE_STYLE = [
     }
   },
   {
+    selector: 'node.taint-path',
+    style: {
+      'background-color': '#FFB74D',
+      'border-color': PATH_COLOR,
+      'border-width': '4px',
+    }
+  },
+  {
+    selector: 'edge.taint-step',
+    style: {
+      'width': 4,
+      'line-color': PATH_COLOR,
+      'target-arrow-color': PATH_COLOR,
+      'color': PATH_COLOR,
+      'font-size': '10px',
+      'font-weight': 'bold',
+      'curve-style': 'unbundled-bezier',
+      'control-point-distance': -30,
+      'control-point-weight': 0.5,
+      'z-index': 10,
+    }
+  },
+  {
     selector: ':selected',
     style: {
       'color': '#FF6B35',
@@ -234,6 +259,29 @@ const parseCode = async (code: string, language: string): Promise<GraphData> => 
   };
 };
 
+const fetchFindings = async (code: string, language: string): Promise<Finding[]> => {
+  const response = await fetch(`${API_BASE_URL}/taint`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      source_code: code,
+      language: language,
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error(`HTTP error! status: ${response.status}`);
+  }
+
+  const result = await response.json();
+  if (!result.success) {
+    throw new Error(result.error || 'Failed to analyze code');
+  }
+  return result.findings;
+};
+
 const Graph = forwardRef<GraphRef>((_props, ref) => {
   // Load initial value from localStorage
   const getInitialShowDefUseEdges = () => {
@@ -248,21 +296,30 @@ const Graph = forwardRef<GraphRef>((_props, ref) => {
   const nodeSelection = useRef<string>('');
   
   // Use the graph context
-  const { setGraphData } = useGraph();
+  const { setGraphData, setFindings, highlightedPath, setHighlightedPath } = useGraph();
 
   // Store last loaded graphs for toggling DFG edges
   const lastGraphs = useRef<GraphData | null>(null);
+  const latestRequest = useRef(0);
 
   // Update graph with new code
   const updateGraph = async (code: string, language: string = 'c') => {
+    const request = ++latestRequest.current;
+    setHighlightedPath(null);
     if (!code.trim()) {
       setElements([]);
+      setFindings([]);
       lastGraphs.current = null;
       return;
     }
 
+    const findings = fetchFindings(code, language);
+    findings.catch(() => undefined);
     try {
       const graphs = await parseCode(code, language);
+      if (request !== latestRequest.current) {
+        return;
+      }
       
       // Store the graph data in the context (creates Graphology graph)
       setGraphData(graphs.cfg, language);
@@ -273,11 +330,26 @@ const Graph = forwardRef<GraphRef>((_props, ref) => {
       const dfgElements = convertDFGToElements(graphs.dfg);
       setElements([...cfgElements, ...(showDefUseEdges ? dfgElements : [])]);
       setErrorMessage(null);
-      
+
+      try {
+        const found = await findings;
+        if (request === latestRequest.current) {
+          setFindings(found);
+        }
+      } catch (taintError) {
+        console.error('Error running taint analysis:', taintError);
+        if (request === latestRequest.current) {
+          setFindings([]);
+        }
+      }
     } catch (err) {
+      if (request !== latestRequest.current) {
+        return;
+      }
       if (err instanceof Error) {
         setErrorMessage(err.toString());
         setElements([]);
+        setFindings([]);
         lastGraphs.current = null;
       } else {
         console.error('Unhandled error:', err);
@@ -299,6 +371,34 @@ const Graph = forwardRef<GraphRef>((_props, ref) => {
       return newValue;
     });
   };
+
+  useEffect(() => {
+    const cy = cyRef.current;
+    if (!cy) return;
+    cy.nodes('.taint-path').removeClass('taint-path');
+    cy.remove('.taint-step');
+    if (!highlightedPath) return;
+    highlightedPath.forEach((step, index) => {
+      const target = cy.getElementById(step.node.toString());
+      target.addClass('taint-path');
+      if (index === 0) return;
+      const source = cy.getElementById(highlightedPath[index - 1].node.toString());
+      if (source.empty() || target.empty()) return;
+      const kind = [step.edge ?? 'flow', step.variable].filter(Boolean).join(' ');
+      cy.add({
+        group: 'edges',
+        data: {
+          id: `taint-step-${index}`,
+          source: source.id(),
+          target: target.id(),
+          label: `${index}: ${kind}`,
+          edgeType: 'TAINT_STEP',
+        },
+        classes: 'taint-step',
+      });
+    });
+    cy.fit(cy.elements('.taint-path, .taint-step'), 40);
+  }, [highlightedPath, elements]);
 
   // Expose methods to parent via ref
   useImperativeHandle(ref, () => ({
@@ -508,7 +608,7 @@ function loadZoomAndPanInfo(cy: cytoscape.Core) {
 function layoutGraph(cy: cytoscape.Core, callback?: () => void) {
   // Get only CFG nodes and edges (exclude DFG edges)
   const cfgNodes = cy.nodes().filter((n) => !n.isEdge() && n.data('nodeType'));
-  const cfgEdges = cy.edges().filter((e) => e.data('edgeType') !== 'DATA_DEPENDENCY');
+  const cfgEdges = cy.edges().filter((e) => !LAYOUT_EXCLUDED_EDGES.includes(e.data('edgeType')));
   // Hide DFG edges during layout
   cy.edges().filter((e) => e.data('edgeType') === 'DATA_DEPENDENCY').style({ display: 'none' });
 

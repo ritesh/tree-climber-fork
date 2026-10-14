@@ -18,11 +18,19 @@ class CFGVisualizer(BaseVisualizer):
     @override
     def visualize(self):
         options = self.options
-        cfg = self.cfg
-        duc_edges = self.duc_edges
         if not options.draw_cfg:
             return
 
+        self.graph().draw(str(self.output_path("cfg")), prog="dot")
+        name = "CFG"
+        if options.draw_dfg:
+            name += "/DFG"
+        print(f"Saved {name} visualization: {self.output_path('cfg')}")
+
+    def graph(self) -> pgv.AGraph:
+        options = self.options
+        cfg = self.cfg
+        duc_edges = self.duc_edges
         if cfg is None:
             raise ValueError("CFG required to draw CFG")
         if options.draw_dfg and duc_edges is None:
@@ -51,8 +59,4 @@ class CFGVisualizer(BaseVisualizer):
             for (src, dst), names in duc_edges.items():
                 dfg_label = ", ".join(sorted(names))
                 add_dfg_edge(G_cfg, src, dst, dfg_label)
-        G_cfg.draw(str(self.output_path("cfg")), prog="dot")
-        name = "CFG"
-        if options.draw_dfg:
-            name += "/DFG"
-        print(f"Saved {name} visualization: {self.output_path('cfg')}")
+        return G_cfg
