@@ -8,7 +8,6 @@ function stepLabel(step: PathStep, index: number): string {
   return `${arrow}[${step.node}] ${text}`;
 }
 
-// Taint findings for the code in the editor; selecting one highlights its path
 const Findings = () => {
   const { findings, highlightedPath, setHighlightedPath } = useGraph();
 

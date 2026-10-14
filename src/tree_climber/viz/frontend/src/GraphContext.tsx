@@ -56,7 +56,6 @@ export interface DFGData {
   edges: DFGEdge[];
 }
 
-// A step of a path, as the query and taint APIs return it
 export interface PathStep {
   node: number;
   node_type: string;
@@ -105,7 +104,6 @@ interface GraphContextState {
   getNodeAttribute: (nodeId: string, attribute: keyof NodeAttributes) => any;
   getAllNodes: () => string[];
   getAllEdges: () => Array<{ source: string; target: string; attributes: EdgeAttributes }>;
-  // Taint findings for the current code, and the path shown on the graph and in the editor
   findings: Finding[];
   setFindings: (findings: Finding[]) => void;
   highlightedPath: PathStep[] | null;

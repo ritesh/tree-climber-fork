@@ -64,7 +64,6 @@ const MonacoEditor = ({ language, onTextChange }: { language: string, onTextChan
   const decorationsCollectionRef = React.useRef<any>(null);
   const pathDecorationsRef = React.useRef<monaco.editor.IEditorDecorationsCollection | null>(null);
 
-  // Highlight every node of the selected finding's path; its source and sink stand out
   React.useEffect(() => {
     pathDecorationsRef.current?.clear();
     const editor: monaco.editor.IStandaloneCodeEditor | null = editorRef.current;

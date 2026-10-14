@@ -259,7 +259,6 @@ const parseCode = async (code: string, language: string): Promise<GraphData> => 
   };
 };
 
-// API call to run the built-in taint rules on the code
 const fetchFindings = async (code: string, language: string): Promise<Finding[]> => {
   const response = await fetch(`${API_BASE_URL}/taint`, {
     method: 'POST',
@@ -301,9 +300,11 @@ const Graph = forwardRef<GraphRef>((_props, ref) => {
 
   // Store last loaded graphs for toggling DFG edges
   const lastGraphs = useRef<GraphData | null>(null);
+  const latestRequest = useRef(0);
 
   // Update graph with new code
   const updateGraph = async (code: string, language: string = 'c') => {
+    const request = ++latestRequest.current;
     setHighlightedPath(null);
     if (!code.trim()) {
       setElements([]);
@@ -312,8 +313,13 @@ const Graph = forwardRef<GraphRef>((_props, ref) => {
       return;
     }
 
+    const findings = fetchFindings(code, language);
+    findings.catch(() => undefined);
     try {
       const graphs = await parseCode(code, language);
+      if (request !== latestRequest.current) {
+        return;
+      }
       
       // Store the graph data in the context (creates Graphology graph)
       setGraphData(graphs.cfg, language);
@@ -326,12 +332,20 @@ const Graph = forwardRef<GraphRef>((_props, ref) => {
       setErrorMessage(null);
 
       try {
-        setFindings(await fetchFindings(code, language));
+        const found = await findings;
+        if (request === latestRequest.current) {
+          setFindings(found);
+        }
       } catch (taintError) {
         console.error('Error running taint analysis:', taintError);
-        setFindings([]);
+        if (request === latestRequest.current) {
+          setFindings([]);
+        }
       }
     } catch (err) {
+      if (request !== latestRequest.current) {
+        return;
+      }
       if (err instanceof Error) {
         setErrorMessage(err.toString());
         setElements([]);
@@ -358,7 +372,6 @@ const Graph = forwardRef<GraphRef>((_props, ref) => {
     });
   };
 
-  // Highlight the selected finding's path: its nodes, and one numbered edge per step
   useEffect(() => {
     const cy = cyRef.current;
     if (!cy) return;

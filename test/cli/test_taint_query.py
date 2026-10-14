@@ -249,6 +249,21 @@ class TestTaint:
         assert result.exit_code == 0, result.output
         assert result.output.startswith("Analyzing: stdin\n1. python-command")
 
+    def test_empty_stdin_is_an_error(self, in_tmp):
+        result = invoke("taint", "-", "-l", "python", input="  \n")
+
+        assert result.exit_code == 1
+        assert "Stdin is empty" in result.output
+
+    def test_stdin_from_a_terminal_is_an_error(self, in_tmp, monkeypatch):
+        monkeypatch.setattr(
+            "tree_climber.cli.__main__.is_stdin_available", lambda: False
+        )
+        result = invoke("query", "-", "-l", "c", "--calls", "puts")
+
+        assert result.exit_code == 1
+        assert "no stdin input detected" in result.output
+
     def test_stdin_needs_a_language(self, in_tmp):
         result = invoke("taint", "-", input="x = 1\n")
 

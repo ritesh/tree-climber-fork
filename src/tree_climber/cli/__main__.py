@@ -419,7 +419,16 @@ def resolve_source(filename: Path, language: Optional[str]) -> Tuple[CodeSource,
         if not language:
             typer.echo("Error: Language must be specified when using stdin", err=True)
             raise typer.Exit(1)
-        return StdinSource(read_stdin()), language
+        if not is_stdin_available():
+            typer.echo(
+                "Error: Filename '-' specified but no stdin input detected", err=True
+            )
+            raise typer.Exit(1)
+        source_code = read_stdin()
+        if not source_code.strip():
+            typer.echo("Error: Stdin is empty", err=True)
+            raise typer.Exit(1)
+        return StdinSource(source_code), language
     code_source = FileSource(filename)
     language = language or code_source.get_language_hint()
     if not language:
