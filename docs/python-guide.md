@@ -56,7 +56,7 @@ Add `--show` to open the saved images in your default image viewer; without it t
 
 ## 2. Dump the graph as text
 
-The CLI only draws images. To compare against expected edges, paste this into a file such as `dump.py`. It prints CFG edges and def-use chains for Python read from stdin.
+The CLI draws images, and answers a few questions as text (`tree-climber taint` and `tree-climber query`, see [Tracing user input](#tracing-user-input)). To compare against expected edges, paste this into a file such as `dump.py`. It prints CFG edges and def-use chains for Python read from stdin.
 
 ```python
 import sys
@@ -987,6 +987,86 @@ Check, and what is approximate:
 - under-approximations: aliasing (two names for one object), output parameters (C's `fgets(buf, ...)` or `snprintf(cmd, ...)` do not taint `buf` or `cmd`), dynamic features (`getattr`, `exec` of strings), calls through function pointers, and branching on tainted data (implicit flows, #49);
 - attribute sources are matched as text in the statement, outside string literals and comments.
 
+### Tracing user input
+
+The same analysis runs from the command line, the HTTP API and the web UI. Save the program from [Taint analysis](#taint-analysis) (the text of `APP`) as `app.py`:
+
+```bash
+uv run tree-climber taint app.py
+```
+
+```
+Analyzing: app.py
+1. python-command-injection: argument 0 of os.system (line 13)
+   line 7    [7] host = request.args.get("host")
+   line 8      --def_use host--> [8] run("ping -c 1 " + host)
+   line 12     --argument command--> [10] ENTRY run
+   line 13     --def_use command--> [12] os.system(command)
+2. python-sql-injection: argument 0 of cursor.execute (line 19)
+   line 17   [15] term = request.args["q"]
+   line 19     --def_use term--> [17] cursor.execute("SELECT * FROM t WHERE name = '" + term + ...
+2 findings
+```
+
+Each finding is numbered, names the sink call and its watched argument, and lists its path: the source line first, then one step per edge (`def_use`, `argument` into a parameter, `return` into a caller, `free_variable`) with the variable it carries. The bracketed numbers are node ids.
+
+- `--rules builtin` (the default) uses the example rules for the file's language; `--rules rules.json` loads your own, in the JSON format above. YAML files are refused (PyYAML is not a dependency): write the same structure as JSON. A rule file with no rule for the file's language is an error, not "no findings".
+- `--json` prints `{"findings": [...]}`, each finding as `Finding.to_dict()` (the path in the [Paths as data](#paths-as-data) format).
+- `--finding N` keeps only finding N. `--draw-cfg` and `--draw-dfg` draw each finding (or only N) on the CFG or DFG with its path in orange: the path's nodes filled, and one bold numbered edge per step labeled with its kind and variable. `uv run tree-climber taint app.py --finding 1 --draw-cfg --draw-dfg -o out` writes `out/app.py_finding1_cfg.png` and `out/app.py_finding1_dfg.png`; `--show` opens them.
+- `-` reads the code from stdin (`cat app.py | uv run tree-climber taint - -l python`).
+
+`tree-climber query` answers the two most common questions without writing Python. Who calls a function (matched like `CodeGraph.calling`, by name or whole callee; `--calls` can be repeated):
+
+```bash
+uv run tree-climber query app.py --calls system
+```
+
+```
+Calls to system: 1 node
+   line 13   [12] os.system(command)  (in run)
+```
+
+What a line affects (`--slice-from N`, a forward slice) or depends on (`--backward`). Slices follow arguments and returns into other functions unless you pass `--no-across-calls`, and `--variable NAME` follows one variable:
+
+```bash
+uv run tree-climber query app.py --slice-from 7
+uv run tree-climber query app.py --slice-from 13 --backward --no-across-calls
+```
+
+```
+Forward slice from line 7: 5 nodes
+   line 7    [7] host = request.args.get("host")  (in ping)
+   line 8    [8] run("ping -c 1 " + host)  (in ping)
+   line 9    [9] run("ping -c 1 " + shlex.quote(host))  (in ping)
+   line 12   [10] ENTRY run  (in run)
+   line 13   [12] os.system(command)  (in run)
+Backward slice from line 13: 2 nodes
+   line 12   [10] ENTRY run  (in run)
+   line 13   [12] os.system(command)  (in run)
+```
+
+The slice starts from the nodes that begin on the line (or, for a line inside a statement, that statement). `--json` prints `{"nodes": [{"node", "node_type", "text", "line", "function"}, ...]}`.
+
+Over HTTP (see [HTTP API](#4-http-api)), `POST /taint` and `POST /query` take the same `source_code` and `language` as `/parse`:
+
+```bash
+curl -s localhost:8000/taint -H 'content-type: application/json' \
+  -d '{"language": "python", "source_code": "import os\nos.system(input())\n"}'
+```
+
+```json
+{"success":true,"findings":[{"rule":"python-command-injection","source":3,"sink":3,"sink_call":"os.system","argument":0,"path":{"steps":[{"node":3,"node_type":"STATEMENT","text":"os.system(input())","edge":null,"variable":null}]}}],"error":null}
+```
+
+`/taint` takes an optional `rules` object (the JSON rule format; the built-in example rules when omitted). `/query` takes `"kind": "calls"` with `names`, or `"kind": "slice"` with `line` and optionally `backward`, `variable` and `across_calls` (default true), and returns `nodes` as in `--json`. Node ids are those `/parse` returns for the same code, so a client can map a path onto the graph and onto source spans. Errors (bad rules, a line with no statement) come back as `"success": false` with `error`.
+
+In the web UI, the panel under the editor and the graph lists the findings of the built-in rules for the code in the editor (the Python sample has one). Select a finding to highlight its path: its nodes and numbered steps on the graph, and each node's code in the editor (the source and the sink darker). Select it again, or edit the code, to clear it.
+
+What this does not do:
+- one file at a time: a project such as a Django or aiohttp app has to be checked file by file, and a value that crosses files (a helper in another module, a view registered elsewhere) is not followed;
+- the CLI and the web UI use the example rules unless given others; framework sources such as Django's `request.GET` or aiohttp's `request.query` need rules of your own (`{"attribute": "request.GET"}`);
+- the web UI only uses the built-in rules, and maps paths onto the editor by byte offsets, so on lines with non-ASCII characters the highlight can be shifted.
+
 ## 4. HTTP API
 
 ```bash
@@ -998,7 +1078,7 @@ curl -s localhost:8000/parse -H 'content-type: application/json' \
   -d '{"language": "python", "source_code": "x = 1\nprint(x)\n"}'
 ```
 
-The response has `success`, `cfg` (`function_name`, `entry_node_ids`, `exit_node_ids`, `nodes`), `ast`, and `dfg` (`edges` from definition to use, labeled with the variable). An unsupported language such as `"cobol"` is rejected with a validation error. `GET /` lists the supported languages and `GET /health` returns `{"status": "healthy"}`.
+The response has `success`, `cfg` (`function_name`, `entry_node_ids`, `exit_node_ids`, `nodes`), `ast`, and `dfg` (`edges` from definition to use, labeled with the variable). An unsupported language such as `"cobol"` is rejected with a validation error. `POST /taint` and `POST /query` are described in [Tracing user input](#tracing-user-input). `GET /` lists the supported languages and `GET /health` returns `{"status": "healthy"}`.
 
 ## 5. Run the Python tests
 

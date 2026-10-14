@@ -56,6 +56,24 @@ export interface DFGData {
   edges: DFGEdge[];
 }
 
+// A step of a path, as the query and taint APIs return it
+export interface PathStep {
+  node: number;
+  node_type: string;
+  text: string;
+  edge: string | null;
+  variable: string | null;
+}
+
+export interface Finding {
+  rule: string;
+  source: number;
+  sink: number;
+  sink_call: string;
+  argument: number;
+  path: { steps: PathStep[] };
+}
+
 // Node attributes for Graphology
 interface NodeAttributes extends Attributes {
   node_type: string;
@@ -87,6 +105,11 @@ interface GraphContextState {
   getNodeAttribute: (nodeId: string, attribute: keyof NodeAttributes) => any;
   getAllNodes: () => string[];
   getAllEdges: () => Array<{ source: string; target: string; attributes: EdgeAttributes }>;
+  // Taint findings for the current code, and the path shown on the graph and in the editor
+  findings: Finding[];
+  setFindings: (findings: Finding[]) => void;
+  highlightedPath: PathStep[] | null;
+  setHighlightedPath: (path: PathStep[] | null) => void;
 }
 
 // Create the context
@@ -97,6 +120,8 @@ export const GraphProvider: React.FC<{ children: ReactNode }> = ({ children }) =
   const [graphologyGraph, setGraphologyGraph] = useState<DirectedGraph<NodeAttributes, EdgeAttributes> | null>(null);
   const [cfgData, setCfgData] = useState<CFGData | null>(null);
   const [currentLanguage, setCurrentLanguage] = useState<string>('c');
+  const [findings, setFindings] = useState<Finding[]>([]);
+  const [highlightedPath, setHighlightedPath] = useState<PathStep[] | null>(null);
 
   const setGraphData = (newCfgData: CFGData, language: string) => {
     setCfgData(newCfgData);
@@ -195,6 +220,10 @@ export const GraphProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     getNodeAttribute,
     getAllNodes,
     getAllEdges,
+    findings,
+    setFindings,
+    highlightedPath,
+    setHighlightedPath,
   };
 
   return (

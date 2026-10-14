@@ -9,10 +9,13 @@ and Code Property Graphs (CPG).
 Feature parity with tree-climber: https://github.com/bstee615/tree-climber
 """
 
+import sys
 from pathlib import Path
-from typing import Optional
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import typer
+import typer.main
+from typer.core import TyperCommand
 from typing_extensions import Annotated
 
 from tree_climber import __version__ as VERSION
@@ -20,7 +23,10 @@ from tree_climber.cli.commands import (
     SUPPORTED_LAYOUTS,
     AnalysisOptions,
     analyze_source_code,
+    run_query,
+    run_taint,
 )
+from tree_climber.cli.options import QueryOptions, TaintOptions
 from tree_climber.cli.source import (
     ClipboardSource,
     CodeSource,
@@ -55,6 +61,44 @@ def list_languages_callback(value: bool) -> None:
         raise typer.Exit()
 
 
+SUBCOMMANDS: Dict[str, typer.Typer] = {}
+
+
+class DrawCommand(TyperCommand):
+    """The drawing command, which hands `taint ...` and `query ...` to those
+    commands so that a file name can still come first (`tree-climber FILE
+    --draw-cfg`)."""
+
+    def main(
+        self,
+        args: Optional[Sequence[str]] = None,
+        prog_name: Optional[str] = None,
+        complete_var: Optional[str] = None,
+        standalone_mode: bool = True,
+        windows_expand_args: bool = True,
+        **extra: Any,
+    ) -> Any:
+        arguments = list(sys.argv[1:] if args is None else args)
+        if arguments and arguments[0] in SUBCOMMANDS:
+            name = arguments[0]
+            return typer.main.get_command(SUBCOMMANDS[name]).main(
+                args=arguments[1:],
+                prog_name=f"{prog_name or app.info.name} {name}",
+                complete_var=complete_var,
+                standalone_mode=standalone_mode,
+                windows_expand_args=windows_expand_args,
+                **extra,
+            )
+        return super().main(
+            args,
+            prog_name,
+            complete_var,
+            standalone_mode,
+            windows_expand_args,
+            **extra,
+        )
+
+
 # Create the main Typer app
 app = typer.Typer(
     name="tree-climber",
@@ -64,7 +108,9 @@ app = typer.Typer(
 )
 
 
-@app.command(context_settings={"token_normalize_func": normalize_option})
+@app.command(
+    cls=DrawCommand, context_settings={"token_normalize_func": normalize_option}
+)
 def typer_main(
     version: Annotated[
         Optional[bool],
@@ -198,6 +244,14 @@ def typer_main(
     echo 'int main() { return 0; }' | tree-climber - --language c --draw-ast
     cat mycode.java | tree-climber - -l java --draw-cfg
     cat module.py | tree-climber - -l python --draw-cfg --draw-dfg
+
+    # Trace untrusted input to dangerous calls (see tree-climber taint --help):\n
+    tree-climber taint app.py\n
+    tree-climber taint app.py --rules rules.json --draw-cfg
+
+    # Ask the graph who calls a function, or what a line affects (see tree-climber query --help):\n
+    tree-climber query app.py --calls system\n
+    tree-climber query app.py --slice-from 12
     """
     # Handle draw_duc as alias for draw_dfg
     draw_dfg = draw_dfg or draw_duc
@@ -349,6 +403,200 @@ def typer_main(
         else:
             typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(1)
+
+
+def resolve_source(filename: Path, language: Optional[str]) -> Tuple[CodeSource, str]:
+    """A file, or stdin for `-`, and its language."""
+    if language and language not in SUPPORTED_LANGUAGES:
+        typer.echo(
+            f"Error: Unsupported language '{language}'. "
+            f"Supported languages: {', '.join(SUPPORTED_LANGUAGES)}",
+            err=True,
+        )
+        raise typer.Exit(1)
+    code_source: CodeSource
+    if str(filename) == "-":
+        if not language:
+            typer.echo("Error: Language must be specified when using stdin", err=True)
+            raise typer.Exit(1)
+        return StdinSource(read_stdin()), language
+    code_source = FileSource(filename)
+    language = language or code_source.get_language_hint()
+    if not language:
+        typer.echo(
+            f"Error: Could not auto-detect language for '{filename}'. "
+            f"Please specify with --language option.",
+            err=True,
+        )
+        raise typer.Exit(1)
+    return code_source, language
+
+
+def fail(error: Exception) -> None:
+    typer.echo(f"Error: {error}", err=True)
+    raise typer.Exit(1)
+
+
+FileArgument = Annotated[
+    Path,
+    typer.Argument(help="Source file to analyze, or '-' for stdin (with --language)"),
+]
+LanguageOption = Annotated[
+    Optional[str],
+    typer.Option(
+        "--language",
+        "-l",
+        help=f"Programming language ({', '.join(SUPPORTED_LANGUAGES)}). Auto-detected if not specified.",
+    ),
+]
+JsonOption = Annotated[bool, typer.Option("--json", help="Print the result as JSON")]
+
+taint_app = typer.Typer(add_completion=False, rich_markup_mode="rich")
+
+
+@taint_app.command(context_settings={"token_normalize_func": normalize_option})
+def taint(
+    filename: FileArgument,
+    rules: Annotated[
+        str,
+        typer.Option(
+            "--rules",
+            "-r",
+            help="'builtin' for the example rules, or a JSON rule file",
+        ),
+    ] = "builtin",
+    language: LanguageOption = None,
+    as_json: JsonOption = False,
+    finding: Annotated[
+        Optional[int],
+        typer.Option(
+            "--finding", "-f", min=1, help="Only this finding (numbered from 1)"
+        ),
+    ] = None,
+    draw_cfg: Annotated[
+        bool,
+        typer.Option("--draw-cfg", help="Draw each finding's path on the CFG"),
+    ] = False,
+    draw_dfg: Annotated[
+        bool,
+        typer.Option("--draw-dfg", help="Draw each finding's path on the DFG"),
+    ] = False,
+    output_dir: Annotated[
+        Optional[Path],
+        typer.Option(
+            "--output",
+            "-o",
+            help="Output directory for images (default: same as input file)",
+        ),
+    ] = None,
+    show: Annotated[
+        bool,
+        typer.Option("--show", help="Open the saved images in the image viewer"),
+    ] = False,
+):
+    """
+    Trace untrusted input to dangerous calls and print each finding with its path.
+
+    Examples:
+
+    # With the built-in example rules:\n
+    tree-climber taint app.py
+
+    # With your own rules (JSON, see the Python guide), as JSON output:\n
+    tree-climber taint app.py --rules rules.json --json
+
+    # Draw the path of finding 1 on the CFG and the DFG:\n
+    tree-climber taint app.py --finding 1 --draw-cfg --draw-dfg -o out
+    """
+    code_source, language = resolve_source(filename, language)
+    options = TaintOptions(
+        language=language,
+        rules=rules,
+        as_json=as_json,
+        finding=finding,
+        draw_cfg=draw_cfg,
+        draw_dfg=draw_dfg,
+        output_dir=output_dir or code_source.get_output_dir(),
+        show=show,
+    )
+    try:
+        run_taint(code_source, options)
+    except Exception as e:
+        fail(e)
+
+
+query_app = typer.Typer(add_completion=False, rich_markup_mode="rich")
+
+
+@query_app.command(context_settings={"token_normalize_func": normalize_option})
+def query(
+    filename: FileArgument,
+    calls: Annotated[
+        Optional[List[str]],
+        typer.Option(
+            "--calls", help="Nodes that call this function (repeat for several)"
+        ),
+    ] = None,
+    slice_from: Annotated[
+        Optional[int],
+        typer.Option(
+            "--slice-from",
+            min=1,
+            help="Nodes whose values depend on the statement on this line",
+        ),
+    ] = None,
+    backward: Annotated[
+        bool,
+        typer.Option(
+            "--backward", help="With --slice-from: the nodes the line depends on"
+        ),
+    ] = False,
+    variable: Annotated[
+        Optional[str],
+        typer.Option("--variable", help="With --slice-from: follow only this variable"),
+    ] = None,
+    across_calls: Annotated[
+        bool,
+        typer.Option(
+            "--across-calls/--no-across-calls",
+            help="With --slice-from: follow arguments and returns between functions",
+        ),
+    ] = True,
+    language: LanguageOption = None,
+    as_json: JsonOption = False,
+):
+    """
+    Answer a question about the graph: who calls a function, or a slice from a line.
+
+    Examples:
+
+    # Which statements call os.system (or anything named system):\n
+    tree-climber query app.py --calls system
+
+    # What the statement on line 7 affects, and what it depends on:\n
+    tree-climber query app.py --slice-from 7\n
+    tree-climber query app.py --slice-from 7 --backward
+    """
+    if bool(calls) == (slice_from is not None):
+        typer.echo("Error: Give exactly one of --calls and --slice-from", err=True)
+        raise typer.Exit(1)
+    code_source, language = resolve_source(filename, language)
+    options = QueryOptions(
+        language=language,
+        calls=calls or [],
+        slice_from=slice_from,
+        backward=backward,
+        variable=variable,
+        across_calls=across_calls,
+        as_json=as_json,
+    )
+    try:
+        run_query(code_source, options)
+    except Exception as e:
+        fail(e)
+
+
+SUBCOMMANDS.update({"taint": taint_app, "query": query_app})
 
 
 def main() -> None:

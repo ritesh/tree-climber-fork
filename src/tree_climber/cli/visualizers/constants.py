@@ -30,6 +30,8 @@ ENTRY_NODE_COLOR: str = "#90EE90"  # Light green
 EXIT_NODE_COLOR: str = "#FFB6C1"  # Light pink
 REGULAR_NODE_COLOR: str = "#87CEEB"  # Sky blue
 CONDITION_NODE_COLOR: str = "#FFD700"  # Gold
+PATH_NODE_COLOR: str = "#FFB74D"  # Orange, nodes on a highlighted path
+PATH_EDGE_COLOR: str = "#E65100"  # Dark orange, steps of a highlighted path
 
 ENTRY_NODE_SHAPE: str = "s"
 EXIT_NODE_SHAPE: str = "s"

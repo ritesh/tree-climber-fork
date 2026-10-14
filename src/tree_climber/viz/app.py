@@ -6,7 +6,7 @@ and return their Control Flow Graph (CFG) representation in JSON format.
 
 import logging
 import os
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -24,6 +24,15 @@ from tree_climber.language_registry import (
     SUPPORTED_LANGUAGES,
     get_language,
 )
+from tree_climber.query import CodeGraph
+from tree_climber.reporting import (
+    BUILTIN_RULES,
+    load_rules,
+    node_to_dict,
+    rules_from_dict,
+    slice_from_line,
+)
+from tree_climber.taint import analyze
 
 # CORS configuration
 CORS_ORIGINS = [
@@ -92,6 +101,61 @@ class ParseResponse(BaseModel):
     )
 
 
+class TaintRequest(ParseRequest):
+    """Request model for taint analysis"""
+
+    rules: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description='A rule set ({"rules": [...]}, as in a JSON rule file); '
+        "the built-in example rules when omitted",
+    )
+
+
+class TaintResponse(BaseModel):
+    """Response model for taint findings"""
+
+    success: bool = Field(description="Whether the analysis ran")
+    findings: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description="Findings: rule, source and sink node ids, sink_call, "
+        "argument, and path (steps with node id, edge kind and variable)",
+    )
+    error: Optional[str] = Field(
+        default=None, description="Error message if the analysis failed"
+    )
+
+
+class QueryRequest(ParseRequest):
+    """Request model for a graph query"""
+
+    kind: Literal["calls", "slice"] = Field(
+        description="calls: the nodes calling any of `names`; slice: the slice "
+        "from the statement on `line`"
+    )
+    names: List[str] = Field(default_factory=list, description="For calls")
+    line: Optional[int] = Field(default=None, ge=1, description="For slice")
+    backward: bool = Field(default=False, description="For slice: backward")
+    variable: Optional[str] = Field(
+        default=None, description="For slice: follow only this variable"
+    )
+    across_calls: bool = Field(
+        default=True, description="For slice: follow arguments and returns"
+    )
+
+
+class QueryResponse(BaseModel):
+    """Response model for a graph query"""
+
+    success: bool = Field(description="Whether the query ran")
+    nodes: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description="Nodes: id, node_type, text, line, enclosing function",
+    )
+    error: Optional[str] = Field(
+        default=None, description="Error message if the query failed"
+    )
+
+
 @app.get("/")
 async def root():
     """Root endpoint providing API information"""
@@ -101,6 +165,8 @@ async def root():
         "supported_languages": SUPPORTED_LANGUAGES,
         "endpoints": {
             "/parse": "POST - Parse source code and return CFG and AST in JSON format",
+            "/taint": "POST - Taint findings with their paths",
+            "/query": "POST - Nodes calling a function, or a slice from a line",
             "/health": "GET - Health check endpoint",
         },
     }
@@ -172,6 +238,52 @@ async def parse_source_code(request: ParseRequest) -> ParseResponse:
     except Exception as e:
         logger.error(f"Error parsing source code: {str(e)}")
         return ParseResponse(success=False, error=str(e))
+
+
+@app.post("/taint", response_model=TaintResponse)
+async def taint_source_code(request: TaintRequest) -> TaintResponse:
+    """Run taint rules (the built-in example rules by default) on source code.
+    Node ids are those `/parse` returns for the same code."""
+    try:
+        if request.rules is None:
+            rules = load_rules(BUILTIN_RULES, request.language)
+        else:
+            rules = rules_from_dict(request.rules, request.language)
+        graph = CodeGraph.from_source(request.language, request.source_code)
+        findings = analyze(graph.cfg, rules, request.language)
+        return TaintResponse(
+            success=True, findings=[finding.to_dict() for finding in findings]
+        )
+    except Exception as e:
+        logger.error(f"Error in taint analysis: {str(e)}")
+        return TaintResponse(success=False, error=str(e))
+
+
+@app.post("/query", response_model=QueryResponse)
+async def query_source_code(request: QueryRequest) -> QueryResponse:
+    """Answer a query on source code. Node ids are those `/parse` returns."""
+    try:
+        graph = CodeGraph.from_source(request.language, request.source_code)
+        if request.kind == "calls":
+            if not request.names:
+                raise ValueError("A calls query needs names")
+            nodes = graph.calling(*request.names)
+        else:
+            if request.line is None:
+                raise ValueError("A slice query needs a line")
+            nodes = slice_from_line(
+                graph,
+                request.line,
+                backward=request.backward,
+                variable=request.variable,
+                across_calls=request.across_calls,
+            )
+        return QueryResponse(
+            success=True, nodes=[node_to_dict(graph, node) for node in nodes]
+        )
+    except Exception as e:
+        logger.error(f"Error in query: {str(e)}")
+        return QueryResponse(success=False, error=str(e))
 
 
 if os.environ.get("ENABLE_DEBUGPY", "0") == "1":

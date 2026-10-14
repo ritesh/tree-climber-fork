@@ -55,13 +55,44 @@ const MonacoEditor = ({ language, onTextChange }: { language: string, onTextChan
   const [code, setCode] = React.useState<string>("");
   
   // Access the graph context
-  const { graphologyGraph, getNodesInRange } = useGraph();
+  const { graphologyGraph, getNodesInRange, highlightedPath } = useGraph();
   
   // Use refs to store current graph state to avoid stale closures
   const graphRef = React.useRef(graphologyGraph);
   const getNodesInRangeRef = React.useRef(getNodesInRange);
   const editorRef = React.useRef<any>(null);
   const decorationsCollectionRef = React.useRef<any>(null);
+  const pathDecorationsRef = React.useRef<monaco.editor.IEditorDecorationsCollection | null>(null);
+
+  // Highlight every node of the selected finding's path; its source and sink stand out
+  React.useEffect(() => {
+    pathDecorationsRef.current?.clear();
+    const editor: monaco.editor.IStandaloneCodeEditor | null = editorRef.current;
+    const model = editor?.getModel();
+    if (!editor || !model || !highlightedPath || !graphologyGraph) return;
+    const decorations: monaco.editor.IModelDeltaDecoration[] = [];
+    highlightedPath.forEach((step, index) => {
+      const nodeId = step.node.toString();
+      if (!graphologyGraph.hasNode(nodeId)) return;
+      const range = getNodeHighlightRange(graphologyGraph.getNodeAttributes(nodeId));
+      if (!range) return;
+      const start = model.getPositionAt(range[0]);
+      const end = model.getPositionAt(range[1]);
+      const isEnd = index === 0 || index === highlightedPath.length - 1;
+      decorations.push({
+        range: new monaco.Range(start.lineNumber, start.column, end.lineNumber, end.column),
+        options: {
+          className: isEnd ? 'taint-path-end' : 'taint-path-step',
+          hoverMessage: { value: `Step ${index + 1}: [${step.node}] ${step.text}` },
+          stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges,
+        },
+      });
+    });
+    pathDecorationsRef.current = editor.createDecorationsCollection(decorations);
+    if (decorations.length > 0) {
+      editor.revealRangeInCenterIfOutsideViewport(decorations[0].range);
+    }
+  }, [highlightedPath, graphologyGraph]);
 
   // Register callback to highlight code when a graph node is selected
   React.useEffect(() => {

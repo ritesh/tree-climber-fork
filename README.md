@@ -96,6 +96,8 @@ Options also accept underscores (`--draw_cfg`), for compatibility with earlier v
 
 Graphs are saved as PNG files next to the input, or in the directory given with `-o`.
 
+Two commands answer questions as text: `tree-climber taint app.py` traces untrusted input to dangerous calls and prints each finding with its path (`--rules rules.json` for your own rules, `--json`, and `--draw-cfg`/`--draw-dfg` to draw a finding's path), and `tree-climber query app.py --calls system` or `--slice-from 12` lists the callers of a function or a slice from a line. See [Tracing user input](./docs/python-guide.md#tracing-user-input).
+
 ### Web Application
 
 The project includes a webapp for visualizing and interacting with CFG/DFGs, inspired by https://godbolt.org.
@@ -135,6 +137,8 @@ bun dev
 The FastAPI backend provides the following endpoints:
 
 - `POST /parse` - Parse source code (`{"source_code": ..., "language": "c" | "java" | "python"}`) and return the CFG, AST, and def-use edges as JSON
+- `POST /taint` - Taint findings for source code, with their paths (built-in example rules, or `rules` in the request)
+- `POST /query` - The nodes calling a function, or a slice from a line
 - `GET /` - API version and supported languages
 - `GET /health` - Health check endpoint
 
