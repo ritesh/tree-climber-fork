@@ -1,0 +1,117 @@
+name: Stress
+
+on:
+  schedule:
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  corpus:
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: cpython
+            repository: python/cpython
+            ref: v3.12.7
+            paths: Lib
+            root: Lib
+          - name: typeshed
+            repository: python/typeshed
+            ref: 86d68f86591c4bf97723350505d2cd28123ab3b6
+            paths: |
+              stdlib
+              stubs
+            root: .
+          - name: black
+            repository: psf/black
+            ref: "25.1.0"
+            paths: tests
+            root: tests
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Checkout corpus
+      uses: actions/checkout@v4
+      with:
+        repository: ${{ matrix.repository }}
+        ref: ${{ matrix.ref }}
+        path: corpus
+        sparse-checkout: ${{ matrix.paths }}
+        persist-credentials: false
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v4
+      with:
+        version: "latest"
+
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y graphviz graphviz-dev
+
+    - name: Install dependencies
+      run: |
+        uv sync --dev
+
+    - name: Run the analyses over the corpus
+      run: |
+        uv run python -m tree_climber.stress corpus/${{ matrix.root }} \
+          --language python --timeout 300 --quiet \
+          --baseline .github/stress-baseline.json \
+          --json stress-${{ matrix.name }}.json
+
+    - name: Upload the report
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: stress-${{ matrix.name }}
+        path: stress-${{ matrix.name }}.json
+        if-no-files-found: ignore
+
+  property:
+    name: Hypothesmith
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v4
+      with:
+        version: "latest"
+
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y graphviz graphviz-dev
+
+    - name: Install dependencies
+      run: |
+        uv sync --dev
+
+    - name: Run the property tests with many examples
+      env:
+        HYPOTHESIS_PROFILE: stress
+      run: |
+        uv run pytest test/test_property.py -v

@@ -19,6 +19,16 @@ class ReachingDefinition(DataflowFact):
         self.variable_name = variable
         self.node_id = node_id
 
+    def __hash__(self) -> int:
+        return hash((self.variable_name, self.node_id))
+
+    def __eq__(self, other: object) -> bool:
+        return (
+            isinstance(other, ReachingDefinition)
+            and self.node_id == other.node_id
+            and self.variable_name == other.variable_name
+        )
+
     def __repr__(self) -> str:
         return (
             f"ReachingDefinition(variable={self.variable_name}, node_id={self.node_id})"
