@@ -9,6 +9,7 @@ sets HYPOTHESIS_PROFILE=stress for many more.
 import os
 
 import hypothesmith
+import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
@@ -25,6 +26,8 @@ settings.register_profile(
     "stress", max_examples=1000, deadline=None, suppress_health_check=list(HealthCheck)
 )
 settings.load_profile(os.environ.get("HYPOTHESIS_PROFILE", "ci"))
+
+pytestmark = pytest.mark.filterwarnings("ignore::SyntaxWarning")
 
 
 def analyze_everything(source: str) -> None:

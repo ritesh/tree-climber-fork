@@ -363,8 +363,10 @@ def summary(results: Sequence[FileResult], slowest: int = 10) -> Dict[str, Any]:
                 "lines": r.lines,
                 "nodes": r.nodes,
             }
-            for r in sorted(results, key=lambda r: -r.total_seconds)[:slowest]
-            if r.failure is None
+            for r in sorted(
+                (r for r in results if r.failure is None),
+                key=lambda r: -r.total_seconds,
+            )[:slowest]
         ],
     }
 

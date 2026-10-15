@@ -78,6 +78,7 @@ def test_run_file_runs_every_stage(corpus):
     assert list(result.seconds) == list(STAGES)
     assert result.lines == 8
     assert result.nodes > 0
+    assert signal.getitimer(signal.ITIMER_REAL) == (0.0, 0.0)
 
 
 def test_run_file_always_builds_the_cfg_first(corpus):
@@ -188,22 +189,30 @@ def test_summary_groups_failures_and_lists_the_slowest():
     slow = FileResult(
         "slow.py", "python", lines=99, nodes=50, seconds={"cfg": 1.0, "taint": 2.0}
     )
+    stuck = failing("z.py", "cfg")
+    stuck.seconds = {"cfg": 9.0}
     data = summary(
-        [fast, slow, failing("x.py"), failing("y.py"), failing("z.py", "taint")],
+        [
+            fast,
+            slow,
+            stuck,
+            failing("x.py", "taint"),
+            failing("y.py", "taint"),
+        ],
         slowest=1,
     )
     assert data["files"] == 5
     assert (data["ok"], data["failed"]) == (2, 3)
-    assert data["seconds"] == {"cfg": 1.1, "taint": 2.0}
+    assert data["seconds"] == {"cfg": 10.1, "taint": 2.0}
     assert [(g["stage"], g["count"], g["files"]) for g in data["failures"]] == [
-        ("cfg", 2, ["x.py", "y.py"]),
-        ("taint", 1, ["z.py"]),
+        ("taint", 2, ["x.py", "y.py"]),
+        ("cfg", 1, ["z.py"]),
     ]
     assert data["slowest"] == [
         {"file": "slow.py", "seconds": 3.0, "lines": 99, "nodes": 50}
     ]
     report = format_report(data, compare([failing("x.py")], set()))
-    assert "     2 [cfg] ValueError: boom\n       e.g. x.py" in report
+    assert "     2 [taint] ValueError: boom\n       e.g. x.py" in report
     assert "new: x.py [cfg] ValueError" in report
     assert report.endswith("1 new failures, 0 known, 0 fixed")
 
