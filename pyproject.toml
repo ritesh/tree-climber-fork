@@ -54,6 +54,7 @@ extend-exclude = [
     "test/python_cfg/edge_cases.py",
     "test/python_cfg/nested_structures.py",
     "test/python_cfg/data_flow_patterns.py",
+    "test/taint/corpus",
 ]
 
 [tool.pyright]
@@ -64,4 +65,5 @@ exclude = [
     "test/python_cfg/edge_cases.py",
     "test/python_cfg/nested_structures.py",
     "test/python_cfg/data_flow_patterns.py",
+    "test/taint/corpus",
 ]
