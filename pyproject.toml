@@ -42,6 +42,8 @@ testpaths = [
 
 [dependency-groups]
 dev = [
+    "hypothesis>=6.169.3",
+    "hypothesmith>=0.3.3",
     "pyright>=1.1.402",
     "ruff>=0.12.1",
 ]

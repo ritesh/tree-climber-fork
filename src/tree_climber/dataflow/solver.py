@@ -1,5 +1,3 @@
-import copy
-
 from tree_climber.cfg.visitor import CFG
 from tree_climber.dataflow.dataflow_types import DataflowProblem, DataflowResult
 
@@ -21,7 +19,7 @@ class RoundRobinSolver:
         while changed:
             changed = False  # Reset changed for the next iteration
             for node_id, node in cfg.nodes.items():
-                old_out_facts = copy.deepcopy(out_facts[node_id])
+                old_out_facts = set(out_facts[node_id])
                 predecessors = [
                     p
                     for p in node.predecessors

@@ -199,6 +199,16 @@ uv run pytest
 (cd src/tree_climber/viz/frontend && bun install --frozen-lockfile && bun run build)
 ```
 
+### Stress testing
+
+`python -m tree_climber.stress` runs every analysis (CFG, data flow, interprocedural flows, control dependence, taint) over a directory of real code and reports crashes, timeouts and the slowest files:
+
+```bash
+uv run python -m tree_climber.stress path/to/project --language python --json report.json
+```
+
+Each file runs in a worker process with a time limit (`--timeout`, `--jobs`), so a crash or a hang is reported for that file and the run goes on. With `--baseline FILE` (known failures), it exits with 1 only on new ones. The weekly `Stress` workflow runs it on pinned revisions of CPython's `Lib`, typeshed and Black's tests, with `.github/stress-baseline.json`, and runs the Hypothesmith property tests (`test/test_property.py`) with many more examples (`HYPOTHESIS_PROFILE=stress`). Start it by hand from the Actions tab.
+
 ## Documentation
 
 - [Python guide](./docs/python-guide.md): what is modeled and how to exercise it
