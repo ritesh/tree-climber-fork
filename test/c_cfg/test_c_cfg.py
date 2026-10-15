@@ -264,9 +264,47 @@ class TestBasicControlFlow:
         assert [p.name for p in entry_node.metadata.function.parameters] == parameters
         assert cfg.context.function_definitions == {entry_node.id: name}
 
-    def test_a_definition_without_a_function_declarator_is_an_error(self, helper):
-        with pytest.raises(ValueError, match="No function declarator"):
-            helper.build_cfg_from_code("int x { return 0; }")
+    @pytest.mark.parametrize(
+        "code, name, parameters",
+        [
+            ("ENCODER(gb2312) { return gb2312; }", "ENCODER", ["gb2312"]),
+            ("main(c) { return c; }", "main", ["c"]),
+            ("void NORETURN\nexit_thread(void) { stop(0); }", "exit_thread", []),
+            (
+                "void _Py_NO_RETURN\nexit_thread(void)\n{\n    stop(0);\n}\n",
+                "exit_thread",
+                [],
+            ),
+            ("int (x) { return 0; }", "x", []),
+            ("void encode PARAMS { done(); }", "encode", []),
+            ("int x { return 0; }", "x", []),
+        ],
+    )
+    def test_a_signature_written_by_macros(self, helper, code, name, parameters):
+        cfg = helper.build_cfg_from_code(code)
+
+        entry_node, _ = helper.assert_single_entry_exit(cfg)
+        assert entry_node.source_text == name
+        assert entry_node.metadata.variable_definitions == parameters
+        assert entry_node.metadata.function is not None
+        assert entry_node.metadata.function.call_name == name
+        assert [p.name for p in entry_node.metadata.function.parameters] == parameters
+        assert cfg.context.function_definitions == {entry_node.id: name}
+
+    def test_calls_to_a_function_with_a_macro_signature_are_linked(self, helper):
+        code = """
+        int encode PARAMS { return 1; }
+        int use(void) { return encode(); }
+        """
+        cfg = helper.build_cfg_from_code(code)
+
+        entries = {
+            n.source_text: n for n in helper.get_nodes_by_type(cfg, NodeType.ENTRY)
+        }
+        call = next(
+            n for n in cfg.nodes.values() if n.source_text == "return encode();"
+        )
+        assert call.edge_labels.get(entries["encode"].id) == "function_call"
 
     def test_calls_to_a_function_returning_a_pointer_are_linked(self, helper):
         code = """
@@ -687,6 +725,61 @@ class TestGotoAndLabels:
         assert len(label_nodes) == 1
 
         # Should form a loop-like structure
+        helper.assert_reachable_from_entry(cfg)
+
+    @pytest.mark.parametrize(
+        "comment", ["// cleanup", "/* cleanup */", "/* one */ // two"]
+    )
+    def test_comment_between_a_label_and_its_statement(self, helper, comment):
+        code = f"""
+        int f(int a) {{
+            if (a) goto done;
+            a = 1;
+        done:
+            {comment}
+            return a;
+        }}
+        """
+        cfg = helper.build_cfg_from_code(code)
+
+        (goto,) = helper.get_nodes_by_type(cfg, NodeType.GOTO)
+        (label,) = helper.get_nodes_by_type(cfg, NodeType.LABEL)
+        (ret,) = helper.get_nodes_by_type(cfg, NodeType.RETURN)
+        assert label.id in goto.successors
+        assert list(label.successors) == [ret.id]
+        assert label.source_text == "done"
+
+    def test_consecutive_labels(self, helper):
+        code = """
+        int f(void) {
+            goto second;
+        first:
+        second:
+            return 1;
+        }
+        """
+        cfg = helper.build_cfg_from_code(code)
+
+        labels = {
+            n.source_text: n for n in helper.get_nodes_by_type(cfg, NodeType.LABEL)
+        }
+        (ret,) = helper.get_nodes_by_type(cfg, NodeType.RETURN)
+        assert list(labels["first"].successors) == [labels["second"].id]
+        assert list(labels["second"].successors) == [ret.id]
+
+    def test_label_at_the_end_of_a_block(self, helper):
+        code = """
+        void f(int a) {
+            if (a) goto end;
+            a = 1;
+        end:
+        }
+        """
+        cfg = helper.build_cfg_from_code(code)
+
+        (goto,) = helper.get_nodes_by_type(cfg, NodeType.GOTO)
+        (label,) = helper.get_nodes_by_type(cfg, NodeType.LABEL)
+        assert label.id in goto.successors
         helper.assert_reachable_from_entry(cfg)
 
 
@@ -1560,6 +1653,336 @@ class TestPassthroughKeepsStatementsContainingElse:
         )
         assert texts == ["elsewhere = 2;", "elsewhere = 3;", "int elsewhere = 1;"]
         assert not any(n.source_text.startswith("EXIT:") for n in cfg.nodes.values())
+
+
+class TestRealWorldCode:
+    """Shapes from real C code that used to crash the builder or were skipped
+    (#64): empty `for` clauses, preprocessor conditionals, labels shared by
+    several functions, and code tree-sitter recovered from an error."""
+
+    @staticmethod
+    def node(cfg: CFG, text: str) -> CFGNode:
+        (found,) = [n for n in cfg.nodes.values() if n.source_text == text]
+        return found
+
+    @pytest.mark.parametrize("init", ["i = 0", ""])
+    @pytest.mark.parametrize("condition", ["i < n", ""])
+    @pytest.mark.parametrize("update", ["i++", ""])
+    def test_for_with_empty_clauses(self, helper, init, condition, update):
+        code = f"""
+        int f(int n) {{
+            int i;
+            for ({init}; {condition}; {update}) {{
+                if (n) continue;
+                if (i) break;
+                n--;
+            }}
+            return n;
+        }}
+        """
+        cfg = helper.build_cfg_from_code(code)
+
+        (header,) = helper.get_nodes_by_type(cfg, NodeType.LOOP_HEADER)
+        (cont,) = helper.get_nodes_by_type(cfg, NodeType.CONTINUE)
+        (brk,) = helper.get_nodes_by_type(cfg, NodeType.BREAK)
+        ret = self.node(cfg, "return n;")
+        body_end = self.node(cfg, "n--;")
+        assert header.source_text == (condition or "(no condition)")
+        before = self.node(cfg, "int i;")
+        if init:
+            assert list(before.successors) == [self.node(cfg, init).id]
+            assert list(self.node(cfg, init).successors) == [header.id]
+        else:
+            assert list(before.successors) == [header.id]
+        back = self.node(cfg, update).id if update else header.id
+        assert list(cont.successors) == [back]
+        assert list(body_end.successors) == [back]
+        if update:
+            assert list(self.node(cfg, update).successors) == [header.id]
+        assert list(brk.successors) == [ret.id]
+        assert header.edge_labels[ret.id] == "false"
+        helper.assert_reachable_from_entry(cfg)
+
+    def test_a_label_belongs_to_its_function(self, helper):
+        code = """
+        int f(int a) { if (a) goto fail; return 1; fail: return 0; }
+        int g(int b) { if (b) goto fail; return 2; fail: return 3; }
+        """
+        cfg = helper.build_cfg_from_code(code)
+
+        gotos = sorted(helper.get_nodes_by_type(cfg, NodeType.GOTO), key=lambda n: n.id)
+        labels = sorted(
+            helper.get_nodes_by_type(cfg, NodeType.LABEL), key=lambda n: n.id
+        )
+        assert [list(g.successors) for g in gotos] == [[labels[0].id], [labels[1].id]]
+        assert list(labels[1].successors) == [self.node(cfg, "return 3;").id]
+
+    def test_a_nested_function_keeps_the_labels_apart(self, helper):
+        code = """
+        void outer(void) {
+            goto done;
+            void inner(void) { done: stop(); }
+        done:
+            return;
+        }
+        """
+        cfg = helper.build_cfg_from_code(code)
+
+        (goto,) = helper.get_nodes_by_type(cfg, NodeType.GOTO)
+        labels = {
+            next(iter(n.successors)): n
+            for n in helper.get_nodes_by_type(cfg, NodeType.LABEL)
+        }
+        outer_label = labels[self.node(cfg, "return;").id]
+        assert list(goto.successors) == [outer_label.id]
+
+    def test_a_label_after_a_function_is_not_reached_from_it(self, helper):
+        code = """
+        void f(void) { goto out; }
+        void g(void) { out: return; }
+        """
+        cfg = helper.build_cfg_from_code(code)
+
+        (goto,) = helper.get_nodes_by_type(cfg, NodeType.GOTO)
+        (label,) = helper.get_nodes_by_type(cfg, NodeType.LABEL)
+        assert label.id not in goto.successors
+
+    @pytest.mark.parametrize(
+        "code",
+        [
+            "void f(void) { break; return; }",
+            "void f(void) { continue; return; }",
+            "void f(int a) { case 1: a = 2; break; a = 3; }",
+        ],
+    )
+    def test_break_or_continue_with_no_target_falls_through(self, helper, code):
+        cfg = helper.build_cfg_from_code(code)
+
+        (jump,) = [
+            n
+            for n in cfg.nodes.values()
+            if n.node_type in (NodeType.BREAK, NodeType.CONTINUE)
+        ]
+        assert len(jump.successors) == 1
+        helper.assert_reachable_from_entry(cfg)
+
+    @pytest.mark.parametrize(
+        "code",
+        [
+            "int f(void) { return 1; }\nreturn NULL;\nx = f(y +\n  if (a) {\n#else\n"
+            "int g(void) { return 2; }\n",
+            "return NULL;\nx = f(y +\n  if (a) {\n#else\n"
+            "int f(void) { return 1; }\nint g(void) { return 2; }\n",
+        ],
+    )
+    def test_a_file_that_does_not_parse_as_a_whole(self, helper, code):
+        cfg = helper.build_cfg_from_code(code)
+
+        assert sorted(cfg.context.function_definitions.values()) == ["f", "g"]
+        returns = sorted(
+            n.source_text for n in helper.get_nodes_by_type(cfg, NodeType.RETURN)
+        )
+        assert returns == ["return 1;", "return 2;"]
+        for entry in helper.get_nodes_by_type(cfg, NodeType.ENTRY):
+            assert not entry.predecessors
+
+    def test_a_function_inside_an_error_at_file_level(self, helper):
+        code = (
+            "#ifdef A\nTRANS(Disconnect) (Conn c)\n{\n    stop(c);\n}\n"
+            "TRANS(Close) (Conn c)\n"
+        )
+        cfg = helper.build_cfg_from_code(code)
+
+        assert list(cfg.context.function_definitions.values()) == ["Disconnect"]
+
+    def test_an_error_inside_a_function_keeps_its_statements(self, helper):
+        cfg = helper.build_cfg_from_code("void f(int a) { a = 1; @ a = 2; g(a); }")
+
+        texts = {n.source_text for n in cfg.nodes.values()}
+        assert {"a = 1;", "g(a);"} <= texts
+        helper.assert_reachable_from_entry(cfg)
+
+    def test_ifdef_else_is_a_branch(self, helper):
+        code = """
+        int f(void) {
+            int a;
+        #ifdef FAST
+            a = fast();
+        #else
+            a = slow();
+        #endif
+            return a;
+        }
+        """
+        cfg = helper.build_cfg_from_code(code)
+
+        (head,) = helper.get_nodes_by_type(cfg, NodeType.CONDITION)
+        fast, slow = self.node(cfg, "a = fast();"), self.node(cfg, "a = slow();")
+        ret = self.node(cfg, "return a;")
+        assert head.source_text == "#ifdef FAST"
+        assert head.ast_node is None
+        assert head.edge_labels == {fast.id: "true", slow.id: "false"}
+        assert list(fast.successors) == [ret.id]
+        assert list(slow.successors) == [ret.id]
+
+    def test_if_elif_else_chain(self, helper):
+        code = """
+        int f(void) {
+            int a;
+        #if defined(A) && B > 1
+            a = 1;
+        #elif C
+            a = 2;
+        #else
+            a = 3;
+        #endif
+            return a;
+        }
+        """
+        cfg = helper.build_cfg_from_code(code)
+
+        heads = {
+            n.source_text: n for n in helper.get_nodes_by_type(cfg, NodeType.CONDITION)
+        }
+        assert set(heads) == {"#if defined(A) && B > 1", "#elif C"}
+        first, second = heads["#if defined(A) && B > 1"], heads["#elif C"]
+        ones = [self.node(cfg, f"a = {i};") for i in (1, 2, 3)]
+        assert first.edge_labels == {ones[0].id: "true", second.id: "false"}
+        assert second.edge_labels == {ones[1].id: "true", ones[2].id: "false"}
+        ret = self.node(cfg, "return a;")
+        assert all(list(n.successors) == [ret.id] for n in ones)
+
+    def test_ifndef_without_else_can_be_skipped(self, helper):
+        code = """
+        int f(int a) {
+        #ifndef NDEBUG
+            check(a);
+        #endif
+            return a;
+        }
+        """
+        cfg = helper.build_cfg_from_code(code)
+
+        (head,) = helper.get_nodes_by_type(cfg, NodeType.CONDITION)
+        check, ret = self.node(cfg, "check(a);"), self.node(cfg, "return a;")
+        assert head.source_text == "#ifndef NDEBUG"
+        assert set(head.successors) == {check.id, ret.id}
+        assert head.edge_labels[check.id] == "true"
+        assert list(check.successors) == [ret.id]
+
+    def test_empty_groups_fall_through(self, helper):
+        code = """
+        int f(int a) {
+        #if A
+        #else
+        #endif
+            return a;
+        }
+        """
+        cfg = helper.build_cfg_from_code(code)
+
+        (head,) = helper.get_nodes_by_type(cfg, NodeType.CONDITION)
+        assert list(head.successors) == [self.node(cfg, "return a;").id]
+
+    def test_an_empty_first_group_falls_through(self, helper):
+        code = """
+        int f(int a) {
+        #if A
+        #else
+            a = 1;
+        #endif
+            return a;
+        }
+        """
+        cfg = helper.build_cfg_from_code(code)
+
+        (head,) = helper.get_nodes_by_type(cfg, NodeType.CONDITION)
+        one, ret = self.node(cfg, "a = 1;"), self.node(cfg, "return a;")
+        assert set(head.successors) == {one.id, ret.id}
+        assert head.edge_labels[one.id] == "false"
+
+    def test_nested_conditionals(self, helper):
+        code = """
+        int f(int a) {
+        #ifdef A
+        #  ifdef B
+            a = 1;
+        #  endif
+        #endif
+            return a;
+        }
+        """
+        cfg = helper.build_cfg_from_code(code)
+
+        heads = {
+            n.source_text: n for n in helper.get_nodes_by_type(cfg, NodeType.CONDITION)
+        }
+        assert set(heads) == {"#ifdef A", "#ifdef B"}
+        assert heads["#ifdef A"].edge_labels[heads["#ifdef B"].id] == "true"
+        one, ret = self.node(cfg, "a = 1;"), self.node(cfg, "return a;")
+        assert heads["#ifdef B"].edge_labels[one.id] == "true"
+        assert set(heads["#ifdef B"].successors) == {one.id, ret.id}
+        assert set(heads["#ifdef A"].successors) == {heads["#ifdef B"].id, ret.id}
+
+    def test_a_case_inside_a_conditional(self, helper):
+        code = """
+        int f(int a) {
+            switch (a) {
+            case 1:
+                a = 10;
+                break;
+        #ifdef EXTRA
+            case 2:
+                a = 20;
+                break;
+        #endif
+            }
+            return a;
+        }
+        """
+        cfg = helper.build_cfg_from_code(code)
+
+        (switch,) = helper.get_nodes_by_type(cfg, NodeType.SWITCH_HEAD)
+        assert switch.edge_labels[self.node(cfg, "a = 20;").id] == "2"
+        ret = self.node(cfg, "return a;")
+        assert all(
+            list(b.successors) == [ret.id]
+            for b in helper.get_nodes_by_type(cfg, NodeType.BREAK)
+        )
+
+    def test_a_definition_in_either_group_reaches_a_later_use(self):
+        from tree_climber.taint import Rule, Sink, Source, analyze_source
+
+        code = """
+        void f(void) {
+            char *cmd;
+        #ifdef WIN32
+            cmd = getenv("COMSPEC");
+        #else
+            cmd = "/bin/sh";
+        #endif
+            system(cmd);
+        }
+        """
+        rule = Rule("r", sources=[Source(call="getenv")], sinks=[Sink(call="system")])
+        (finding,) = analyze_source("c", code, rule)
+        assert finding.sink_call == "system"
+
+    def test_functions_inside_top_level_conditionals_are_built(self, helper):
+        code = """
+        #ifdef A
+        int f(void) { return 1; }
+        #elif B
+        int g(void) { return 2; }
+        #else
+        int k(void) { return 3; }
+        #endif
+        int h(void) { return f(); }
+        """
+        cfg = helper.build_cfg_from_code(code)
+
+        assert sorted(cfg.context.function_definitions.values()) == ["f", "g", "h", "k"]
+        assert not helper.get_nodes_by_type(cfg, NodeType.CONDITION)
 
 
 if __name__ == "__main__":
