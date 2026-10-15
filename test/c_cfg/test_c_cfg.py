@@ -270,6 +270,12 @@ class TestBasicControlFlow:
             ("ENCODER(gb2312) { return gb2312; }", "ENCODER", ["gb2312"]),
             ("main(c) { return c; }", "main", ["c"]),
             ("void NORETURN\nexit_thread(void) { stop(0); }", "exit_thread", []),
+            (
+                "void _Py_NO_RETURN\nexit_thread(void)\n{\n    stop(0);\n}\n",
+                "exit_thread",
+                [],
+            ),
+            ("int (x) { return 0; }", "x", []),
             ("void encode PARAMS { done(); }", "encode", []),
             ("int x { return 0; }", "x", []),
         ],
@@ -1652,7 +1658,7 @@ class TestPassthroughKeepsStatementsContainingElse:
 class TestRealWorldCode:
     """Shapes from real C code that used to crash the builder or were skipped
     (#64): empty `for` clauses, preprocessor conditionals, labels shared by
-    several functions, and statements tree-sitter recovered from an error."""
+    several functions, and code tree-sitter recovered from an error."""
 
     @staticmethod
     def node(cfg: CFG, text: str) -> CFGNode:
@@ -1711,6 +1717,25 @@ class TestRealWorldCode:
         assert [list(g.successors) for g in gotos] == [[labels[0].id], [labels[1].id]]
         assert list(labels[1].successors) == [self.node(cfg, "return 3;").id]
 
+    def test_a_nested_function_keeps_the_labels_apart(self, helper):
+        code = """
+        void outer(void) {
+            goto done;
+            void inner(void) { done: stop(); }
+        done:
+            return;
+        }
+        """
+        cfg = helper.build_cfg_from_code(code)
+
+        (goto,) = helper.get_nodes_by_type(cfg, NodeType.GOTO)
+        labels = {
+            next(iter(n.successors)): n
+            for n in helper.get_nodes_by_type(cfg, NodeType.LABEL)
+        }
+        outer_label = labels[self.node(cfg, "return;").id]
+        assert list(goto.successors) == [outer_label.id]
+
     def test_a_label_after_a_function_is_not_reached_from_it(self, helper):
         code = """
         void f(void) { goto out; }
@@ -1741,11 +1766,41 @@ class TestRealWorldCode:
         assert len(jump.successors) == 1
         helper.assert_reachable_from_entry(cfg)
 
-    def test_return_outside_any_function_falls_through(self, helper):
-        cfg = helper.build_cfg_from_code("return NULL;\nx = f(y +\n  if (a) {\n#else\n")
+    @pytest.mark.parametrize(
+        "code",
+        [
+            "int f(void) { return 1; }\nreturn NULL;\nx = f(y +\n  if (a) {\n#else\n"
+            "int g(void) { return 2; }\n",
+            "return NULL;\nx = f(y +\n  if (a) {\n#else\n"
+            "int f(void) { return 1; }\nint g(void) { return 2; }\n",
+        ],
+    )
+    def test_a_file_that_does_not_parse_as_a_whole(self, helper, code):
+        cfg = helper.build_cfg_from_code(code)
 
-        (ret,) = helper.get_nodes_by_type(cfg, NodeType.RETURN)
-        assert len(ret.successors) == 1
+        assert sorted(cfg.context.function_definitions.values()) == ["f", "g"]
+        returns = sorted(
+            n.source_text for n in helper.get_nodes_by_type(cfg, NodeType.RETURN)
+        )
+        assert returns == ["return 1;", "return 2;"]
+        for entry in helper.get_nodes_by_type(cfg, NodeType.ENTRY):
+            assert not entry.predecessors
+
+    def test_a_function_inside_an_error_at_file_level(self, helper):
+        code = (
+            "#ifdef A\nTRANS(Disconnect) (Conn c)\n{\n    stop(c);\n}\n"
+            "TRANS(Close) (Conn c)\n"
+        )
+        cfg = helper.build_cfg_from_code(code)
+
+        assert list(cfg.context.function_definitions.values()) == ["Disconnect"]
+
+    def test_an_error_inside_a_function_keeps_its_statements(self, helper):
+        cfg = helper.build_cfg_from_code("void f(int a) { a = 1; @ a = 2; g(a); }")
+
+        texts = {n.source_text for n in cfg.nodes.values()}
+        assert {"a = 1;", "g(a);"} <= texts
+        helper.assert_reachable_from_entry(cfg)
 
     def test_ifdef_else_is_a_branch(self, helper):
         code = """
@@ -1828,6 +1883,23 @@ class TestRealWorldCode:
 
         (head,) = helper.get_nodes_by_type(cfg, NodeType.CONDITION)
         assert list(head.successors) == [self.node(cfg, "return a;").id]
+
+    def test_an_empty_first_group_falls_through(self, helper):
+        code = """
+        int f(int a) {
+        #if A
+        #else
+            a = 1;
+        #endif
+            return a;
+        }
+        """
+        cfg = helper.build_cfg_from_code(code)
+
+        (head,) = helper.get_nodes_by_type(cfg, NodeType.CONDITION)
+        one, ret = self.node(cfg, "a = 1;"), self.node(cfg, "return a;")
+        assert set(head.successors) == {one.id, ret.id}
+        assert head.edge_labels[one.id] == "false"
 
     def test_nested_conditionals(self, helper):
         code = """

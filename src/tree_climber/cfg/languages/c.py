@@ -323,11 +323,19 @@ class CCFGVisitor(CFGVisitor):
             exit_node_ids=last_exits,
         )
 
+    def visit_ERROR(self, node: Node) -> Optional[CFGTraversalResult]:
+        """A file tree-sitter could not parse as a whole is an ERROR root: its
+        functions are built one by one, as in a translation unit, not chained."""
+        if node.parent is None:
+            return self.visit_translation_unit(node)
+        return self.generic_visit(node)
+
     PREPROCESSOR_GROUPS = (
         "preproc_if",
         "preproc_ifdef",
         "preproc_elif",
         "preproc_else",
+        "ERROR",
     )
 
     @classmethod
@@ -528,10 +536,7 @@ class CCFGVisitor(CFGVisitor):
 
     def visit_preproc_if(self, node: Node) -> CFGTraversalResult:
         """`#if`, `#ifdef` and `#ifndef` in a function: a branch to each group
-        (`#elif`, `#else`), or past the block when there is no `#else`. Outside
-        functions, the groups are visited in sequence."""
-        if not self.context.exit_node_ids:
-            return self.generic_visit(node)
+        (`#elif`, `#else`), or past the block when there is no `#else`."""
         return self._preproc_branch(node)
 
     visit_preproc_ifdef = visit_preproc_if
@@ -707,11 +712,11 @@ class CCFGVisitor(CFGVisitor):
         """Visit a return statement"""
         return_id = self.create_node(NodeType.RETURN, node, get_source_text(node))
 
-        if not self.context.exit_node_ids:
-            return CFGTraversalResult(
-                entry_node_id=return_id, exit_node_ids=[return_id]
-            )
-        self.cfg.add_edge(return_id, self.context.exit_node_ids[-1])
+        # Connect to function exit
+        assert len(self.cfg.exit_node_ids) > 0, (
+            "Return statement must have an exit node"
+        )
+        self.cfg.add_edge(return_id, self.cfg.exit_node_ids[-1])
 
         return CFGTraversalResult(
             entry_node_id=return_id, exit_node_ids=[]
