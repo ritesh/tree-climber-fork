@@ -22,6 +22,17 @@ jobs:
             ref: v3.12.7
             paths: Lib
             root: Lib
+            language: python
+          - name: cpython-c
+            repository: python/cpython
+            ref: v3.12.7
+            paths: |
+              Modules
+              Objects
+              Parser
+              Python
+            root: .
+            language: c
           - name: typeshed
             repository: python/typeshed
             ref: 86d68f86591c4bf97723350505d2cd28123ab3b6
@@ -29,11 +40,13 @@ jobs:
               stdlib
               stubs
             root: .
+            language: python
           - name: black
             repository: psf/black
             ref: "25.1.0"
             paths: tests
             root: tests
+            language: python
 
     steps:
     - name: Checkout code
@@ -70,7 +83,7 @@ jobs:
     - name: Run the analyses over the corpus
       run: |
         uv run python -m tree_climber.stress corpus/${{ matrix.root }} \
-          --language python --timeout 300 --quiet \
+          --language ${{ matrix.language }} --timeout 300 --quiet \
           --baseline .github/stress-baseline.json \
           --json stress-${{ matrix.name }}.json
 

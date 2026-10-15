@@ -3,7 +3,7 @@ Control Flow Graph (CFG) Generator Framework using py-tree-sitter for C language
 This framework uses the visitor pattern with depth-first traversal to build CFGs.
 """
 
-from typing import List, Optional, Tuple
+from typing import Iterator, List, Optional, Tuple
 
 from tree_sitter import Node
 
@@ -310,12 +310,11 @@ class CCFGVisitor(CFGVisitor):
         """Visit the root translation unit node; None if it has no functions"""
         first_entry = None
         last_exits = None
-        for child in node.children:
-            if child.type == "function_definition":
-                result = self.visit(child)
-                if first_entry is None:
-                    first_entry = result.entry_node_id
-                last_exits = result.exit_node_ids
+        for child in self._top_level_functions(node):
+            result = self.visit(child)
+            if first_entry is None:
+                first_entry = result.entry_node_id
+            last_exits = result.exit_node_ids
 
         if first_entry is None or last_exits is None:
             return None
@@ -323,6 +322,23 @@ class CCFGVisitor(CFGVisitor):
             entry_node_id=first_entry,
             exit_node_ids=last_exits,
         )
+
+    PREPROCESSOR_GROUPS = (
+        "preproc_if",
+        "preproc_ifdef",
+        "preproc_elif",
+        "preproc_else",
+    )
+
+    @classmethod
+    def _top_level_functions(cls, node: Node) -> Iterator[Node]:
+        """Function definitions at file level, including those inside `#if`,
+        `#ifdef` and their `#elif` and `#else` groups."""
+        for child in node.children:
+            if child.type == "function_definition":
+                yield child
+            elif child.type in cls.PREPROCESSOR_GROUPS:
+                yield from cls._top_level_functions(child)
 
     def _declared_local_names(self, body: Node) -> List[str]:
         """Names declared in a function body, in any block: `int a, *b = p;`."""
@@ -347,7 +363,7 @@ class CCFGVisitor(CFGVisitor):
         return None
 
     @classmethod
-    def _function_declarator(cls, declarator: Node) -> Node:
+    def _function_declarator(cls, declarator: Node) -> Optional[Node]:
         """The declarator of the function itself, the innermost function
         declarator: `f(...)` in `int *f(...)` and in `int (*f(int x))(int)`, where
         the outer `(int)` belongs to the returned function pointer."""
@@ -357,11 +373,52 @@ class CCFGVisitor(CFGVisitor):
             if node.type == "function_declarator":
                 found = node
             node = cls._inner_declarator(node)
-        if found is None:
-            raise ValueError(
-                f"No function declarator in {get_source_text(declarator)!r}"
-            )
         return found
+
+    def _parameters(self, parameter_list: Node) -> List[ParameterInfo]:
+        parameters: List[ParameterInfo] = []
+        for param in parameter_list.children:
+            if param.type == "parameter_declaration":
+                name = self._declared_identifier(
+                    get_child_by_field_name(param, "declarator")
+                )
+                if name:
+                    parameters.append(ParameterInfo(get_source_text(name)))
+            elif param.is_named and param.type != "comment":
+                parameters.append(
+                    ParameterInfo(get_source_text(param), "var_positional")
+                )
+        return parameters
+
+    def _macro_signature(
+        self, definition: Node, declarator: Node
+    ) -> Tuple[str, List[ParameterInfo]]:
+        """The name and parameters of a definition whose signature macros write,
+        so that it has no function declarator: `NAME(x) {` (a macro, K&R
+        `main(c)`, or a return type on the line before) parses as type `NAME`
+        and declarator `(x)`, and `int f PARAMS {` as the declarator `PARAMS`
+        after an error holding `f`."""
+        name = self._declared_identifier(declarator)
+        for child in definition.children:
+            if child.id == declarator.id:
+                break
+            if child.type == "ERROR" and [c.type for c in child.children] == [
+                "identifier"
+            ]:
+                name = child.children[0]
+        type_node = definition.child_by_field_name("type")
+        if (
+            declarator.type == "parenthesized_declarator"
+            and type_node is not None
+            and type_node.type == "type_identifier"
+        ):
+            parameters = []
+            if name is not None and get_source_text(name) != "void":
+                parameters.append(ParameterInfo(get_source_text(name)))
+            return get_source_text(type_node), parameters
+        if name is None:
+            raise ValueError(f"No function name in {get_source_text(declarator)!r}")
+        return get_source_text(name), []
 
     @classmethod
     def _function_name(cls, function_declarator: Node) -> Node:
@@ -377,37 +434,22 @@ class CCFGVisitor(CFGVisitor):
 
     def visit_function_definition(self, node: Node) -> CFGTraversalResult:
         """Visit a function definition"""
-        # Get components via named fields
-        declarator = self._function_declarator(
-            get_required_child_by_field_name(node, "declarator")
-        )
+        declarator_node = get_required_child_by_field_name(node, "declarator")
         body_node = get_required_child_by_field_name(node, "body")
-
-        # Extract function name and parameters from the declarator
-        function_name = ""
-        parameters = []
         closing_brace = None
 
-        # Look for identifier (function name) and parameter_list in declarator
-        function_name = get_source_text(self._function_name(declarator))
-        parameter_list = get_required_child_by_field_name(declarator, "parameters")
-        parameter_infos: List[ParameterInfo] = []
-        for param in parameter_list.children:
-            match param.type:
-                case "parameter_declaration":
-                    name = self._declared_identifier(
-                        get_child_by_field_name(param, "declarator")
-                    )
-                    if name:
-                        parameters.append(get_source_text(name))
-                        parameter_infos.append(ParameterInfo(get_source_text(name)))
-                case _:
-                    # Skip punctuation and other non-parameter elements
-                    if param.is_named and not param.type == "comment":
-                        parameters.append(get_source_text(param))
-                        parameter_infos.append(
-                            ParameterInfo(get_source_text(param), "var_positional")
-                        )
+        declarator = self._function_declarator(declarator_node)
+        if declarator is not None:
+            function_name = get_source_text(self._function_name(declarator))
+            parameter_infos = self._parameters(
+                get_required_child_by_field_name(declarator, "parameters")
+            )
+        else:
+            declarator = declarator_node
+            function_name, parameter_infos = self._macro_signature(
+                node, declarator_node
+            )
+        parameters = [p.name for p in parameter_infos]
 
         # Find closing brace in body for exit node location
         for child in body_node.children:
@@ -443,48 +485,90 @@ class CCFGVisitor(CFGVisitor):
         )
         self.cfg.exit_node_ids.append(exit_id)
         self.context.push_exit(exit_id)
+        outer_labels = self.context.labels, self.context.forward_goto_refs
+        self.context.labels, self.context.forward_goto_refs = {}, {}
 
         self._create_body_node(body_node, entry_id, exit_id)
 
+        self.context.labels, self.context.forward_goto_refs = outer_labels
         self.context.pop_entry()
         self.context.pop_exit()
 
         return CFGTraversalResult(entry_node_id=entry_id, exit_node_ids=[exit_id])
 
-    def visit_compound_statement(self, node: Node) -> CFGTraversalResult:
-        """Visit a compound statement (block)"""
+    def _visit_sequence(self, nodes: List[Node]) -> Optional[CFGTraversalResult]:
+        """Visit statements one after another; None when there are none."""
         first_entry = None
-        current_exits = []
-
-        # Process each statement in the block
-        for child in node.children:
-            # Skip unnamed nodes and comments
+        current_exits: List[int] = []
+        for child in nodes:
             if not child.is_named or child.type == "comment":
                 continue
-
             child_result = self.visit(child)
-
             if first_entry is None:
-                # First statement becomes the entry point for the block
                 first_entry = child_result.entry_node_id
             else:
-                # Connect previous statement exits to this statement's entry
                 for exit_node in current_exits:
                     self.cfg.add_edge(exit_node, child_result.entry_node_id)
-
-            # Update current exits to this statement's exits
             current_exits = child_result.exit_node_ids
-
-        # If the block is empty, create a placeholder node
         if first_entry is None:
-            placeholder_id = self.create_node(
-                NodeType.STATEMENT, source_text="empty block"
-            )
-            first_entry = placeholder_id
-            current_exits = [placeholder_id]
-
+            return None
         return CFGTraversalResult(
             entry_node_id=first_entry, exit_node_ids=current_exits
+        )
+
+    def visit_compound_statement(self, node: Node) -> CFGTraversalResult:
+        """Visit a compound statement (block)"""
+        result = self._visit_sequence(node.children)
+        if result is not None:
+            return result
+        placeholder_id = self.create_node(NodeType.STATEMENT, source_text="empty block")
+        return CFGTraversalResult(
+            entry_node_id=placeholder_id, exit_node_ids=[placeholder_id]
+        )
+
+    def visit_preproc_if(self, node: Node) -> CFGTraversalResult:
+        """`#if`, `#ifdef` and `#ifndef` in a function: a branch to each group
+        (`#elif`, `#else`), or past the block when there is no `#else`. Outside
+        functions, the groups are visited in sequence."""
+        if not self.context.exit_node_ids:
+            return self.generic_visit(node)
+        return self._preproc_branch(node)
+
+    visit_preproc_ifdef = visit_preproc_if
+
+    def _preproc_branch(self, node: Node) -> CFGTraversalResult:
+        test = node.child_by_field_name("condition") or node.child_by_field_name("name")
+        directive = node.children[0].type
+        head_id = self.create_node(
+            NodeType.CONDITION,
+            source_text=f"{directive} {get_source_text(test)}" if test else directive,
+        )
+        alternative = node.child_by_field_name("alternative")
+        fields = {child.id for child in (test, alternative) if child is not None}
+
+        exits: List[int] = []
+        group = self._visit_sequence(
+            [child for child in node.children if child.id not in fields]
+        )
+        if group is None:
+            exits.append(head_id)
+        else:
+            self.cfg.add_edge(head_id, group.entry_node_id, "true")
+            exits.extend(group.exit_node_ids)
+
+        other = None
+        if alternative is not None and alternative.type == "preproc_else":
+            other = self._visit_sequence(alternative.children)
+        elif alternative is not None:
+            other = self._preproc_branch(alternative)
+        if other is None:
+            exits.append(head_id)
+        else:
+            self.cfg.add_edge(head_id, other.entry_node_id, "false")
+            exits.extend(other.exit_node_ids)
+
+        return CFGTraversalResult(
+            entry_node_id=head_id, exit_node_ids=list(dict.fromkeys(exits))
         )
 
     def visit_if_statement(self, node: Node) -> CFGTraversalResult:
@@ -545,57 +629,56 @@ class CCFGVisitor(CFGVisitor):
         )
 
     def visit_for_statement(self, node: Node) -> CFGTraversalResult:
-        """Visit a for loop"""
-        # Get components via named fields
-        init_expr = get_required_child_by_field_name(node, "initializer")
-        condition_expr = get_required_child_by_field_name(node, "condition")
-        update_expr = get_required_child_by_field_name(node, "update")
+        """Visit a for loop; each of its three clauses may be empty."""
+        init_expr = get_child_by_field_name(node, "initializer")
+        condition_expr = get_child_by_field_name(node, "condition")
+        update_expr = get_child_by_field_name(node, "update")
         body_stmt = get_required_child_by_field_name(node, "body")
 
-        # Create initialization node with actual initialization code
-        init_text = get_source_text(init_expr)
-        init_id = self.create_node(NodeType.STATEMENT, init_expr, init_text)
+        init_id = None
+        if init_expr is not None:
+            init_id = self.create_node(
+                NodeType.STATEMENT, init_expr, get_source_text(init_expr)
+            )
 
-        # Create condition node
-        condition_text = get_source_text(condition_expr)
-        condition_id = self.create_node(
-            NodeType.LOOP_HEADER, condition_expr, condition_text
-        )
+        if condition_expr is not None:
+            condition_id = self.create_node(
+                NodeType.LOOP_HEADER, condition_expr, get_source_text(condition_expr)
+            )
+        else:
+            condition_id = self.create_node(
+                NodeType.LOOP_HEADER, source_text="(no condition)"
+            )
 
-        # Create update node with actual update code
-        update_text = get_source_text(update_expr)
-        update_id = self.create_node(NodeType.STATEMENT, update_expr, update_text)
+        entry_id = condition_id
+        if init_id is not None:
+            entry_id = init_id
+            self.cfg.add_edge(init_id, condition_id)
 
-        # Create exit node
+        continue_id = condition_id
+        if update_expr is not None:
+            continue_id = self.create_node(
+                NodeType.STATEMENT, update_expr, get_source_text(update_expr)
+            )
+
         exit_id = self.create_node(NodeType.EXIT, source_text="EXIT: for loop")
 
-        # Connect init to condition
-        self.cfg.add_edge(init_id, condition_id)
-
-        # Set up loop context
-        self.context.push_loop_context(exit_id, update_id)
-
-        # Process body
-        self._create_body_node(body_stmt, condition_id, update_id, edge_label="true")
-
-        # Connect update back to condition
-        self.cfg.add_edge(update_id, condition_id)
-
-        # Connect condition to exit (false branch) with "false" label
+        self.context.push_loop_context(exit_id, continue_id)
+        self._create_body_node(body_stmt, condition_id, continue_id, edge_label="true")
+        if continue_id != condition_id:
+            self.cfg.add_edge(continue_id, condition_id)
         self.cfg.add_edge(condition_id, exit_id, "false")
-
-        # Clean up loop context
         self.context.pop_loop_context()
 
-        return CFGTraversalResult(entry_node_id=init_id, exit_node_ids=[exit_id])
+        return CFGTraversalResult(entry_node_id=entry_id, exit_node_ids=[exit_id])
 
     def visit_break_statement(self, node: Node) -> CFGTraversalResult:
         """Visit a break statement"""
         break_id = self.create_node(NodeType.BREAK, node, get_source_text(node))
 
-        # Connect to break target if available
         break_target = self.context.get_break_target()
-        assert break_target is not None, "Break statement must have a target"
+        if break_target is None:
+            return CFGTraversalResult(entry_node_id=break_id, exit_node_ids=[break_id])
         self.cfg.add_edge(break_id, break_target)
 
         # The break statement terminates the current control flow.
@@ -609,9 +692,11 @@ class CCFGVisitor(CFGVisitor):
         """Visit a continue statement"""
         continue_id = self.create_node(NodeType.CONTINUE, node, get_source_text(node))
 
-        # Connect to continue target if available
         continue_target = self.context.get_continue_target()
-        assert continue_target is not None, "Continue statement must have a target"
+        if continue_target is None:
+            return CFGTraversalResult(
+                entry_node_id=continue_id, exit_node_ids=[continue_id]
+            )
         self.cfg.add_edge(continue_id, continue_target)
 
         return CFGTraversalResult(
@@ -622,11 +707,11 @@ class CCFGVisitor(CFGVisitor):
         """Visit a return statement"""
         return_id = self.create_node(NodeType.RETURN, node, get_source_text(node))
 
-        # Connect to function exit
-        assert len(self.cfg.exit_node_ids) > 0, (
-            "Return statement must have an exit node"
-        )
-        self.cfg.add_edge(return_id, self.cfg.exit_node_ids[-1])
+        if not self.context.exit_node_ids:
+            return CFGTraversalResult(
+                entry_node_id=return_id, exit_node_ids=[return_id]
+            )
+        self.cfg.add_edge(return_id, self.context.exit_node_ids[-1])
 
         return CFGTraversalResult(
             entry_node_id=return_id, exit_node_ids=[]
