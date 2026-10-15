@@ -776,10 +776,9 @@ class CCFGVisitor(CFGVisitor):
         label_node = get_required_child_by_field_name(node, "label")
         label_name = get_source_text(label_node)
 
-        # Get the statement after label (assuming it's the first non-label child)
         body_stmt = None
         for child in node.children:
-            if child != label_node and child.type != ":":
+            if child.is_named and child != label_node and child.type != "comment":
                 body_stmt = child
                 break
 

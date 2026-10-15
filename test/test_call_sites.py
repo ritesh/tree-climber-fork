@@ -438,8 +438,6 @@ class TestFunctionCallsAreDerivedFromSites:
             ("java", "java_cfg/*.java"),
         ):
             for path in sorted(ROOT.glob(pattern)):
-                if path.name == "real_world_patterns.c":
-                    continue  # does not build on master either (labeled statement)
                 builder = CFGBuilder(language)
                 builder.setup_parser()
                 cfg = builder.build_cfg(path.read_text())

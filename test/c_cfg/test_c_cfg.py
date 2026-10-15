@@ -689,6 +689,61 @@ class TestGotoAndLabels:
         # Should form a loop-like structure
         helper.assert_reachable_from_entry(cfg)
 
+    @pytest.mark.parametrize(
+        "comment", ["// cleanup", "/* cleanup */", "/* one */ // two"]
+    )
+    def test_comment_between_a_label_and_its_statement(self, helper, comment):
+        code = f"""
+        int f(int a) {{
+            if (a) goto done;
+            a = 1;
+        done:
+            {comment}
+            return a;
+        }}
+        """
+        cfg = helper.build_cfg_from_code(code)
+
+        (goto,) = helper.get_nodes_by_type(cfg, NodeType.GOTO)
+        (label,) = helper.get_nodes_by_type(cfg, NodeType.LABEL)
+        (ret,) = helper.get_nodes_by_type(cfg, NodeType.RETURN)
+        assert label.id in goto.successors
+        assert list(label.successors) == [ret.id]
+        assert label.source_text == "done"
+
+    def test_consecutive_labels(self, helper):
+        code = """
+        int f(void) {
+            goto second;
+        first:
+        second:
+            return 1;
+        }
+        """
+        cfg = helper.build_cfg_from_code(code)
+
+        labels = {
+            n.source_text: n for n in helper.get_nodes_by_type(cfg, NodeType.LABEL)
+        }
+        (ret,) = helper.get_nodes_by_type(cfg, NodeType.RETURN)
+        assert list(labels["first"].successors) == [labels["second"].id]
+        assert list(labels["second"].successors) == [ret.id]
+
+    def test_label_at_the_end_of_a_block(self, helper):
+        code = """
+        void f(int a) {
+            if (a) goto end;
+            a = 1;
+        end:
+        }
+        """
+        cfg = helper.build_cfg_from_code(code)
+
+        (goto,) = helper.get_nodes_by_type(cfg, NodeType.GOTO)
+        (label,) = helper.get_nodes_by_type(cfg, NodeType.LABEL)
+        assert label.id in goto.successors
+        helper.assert_reachable_from_entry(cfg)
+
 
 class TestNestedConstructs:
     """Test nested control flow constructs."""
