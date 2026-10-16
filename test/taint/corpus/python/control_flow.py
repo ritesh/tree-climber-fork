@@ -91,11 +91,29 @@ def with_target():
 def match_case():
     match input().split():
         case [verb, target]:
-            # todoruleid: python-command-injection -- the names a case pattern binds are defined by a node that reads nothing, so they do not take the subject's taint (#76)
+            # ruleid: python-command-injection
             os.system(verb + " " + target)
         case _:
             # ok: python-command-injection
             os.system("true")
+
+
+def match_variable(command):
+    match command:
+        case [verb, *_]:
+            # ruleid: python-command-injection
+            os.system(verb)
+
+
+def match_caller():
+    match_variable(input().split())
+
+
+def match_constant():
+    match "ls -l".split():
+        case [verb, *_]:
+            # ok: python-command-injection
+            os.system(verb)
 
 
 def comprehension():
