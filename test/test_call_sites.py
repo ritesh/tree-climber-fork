@@ -18,6 +18,7 @@ from tree_climber.cfg.cfg_types import CallSite, CFGNode
 from tree_climber.cfg.languages import python_calls
 from tree_climber.cfg.languages import python_bindings
 from tree_climber.cfg.languages.python_bindings import collect_bindings
+from tree_climber.language_registry import create_visitor
 
 ROOT = Path(__file__).parent
 
@@ -665,6 +666,97 @@ class TestJava:
         (site,) = sites_of("java", source, "x = g(1);")
 
         assert source[site.start_byte : site.end_byte] == "g(1)"
+
+
+def language_visitor(language: str):
+    return create_visitor(language)
+
+
+class TestMutatingCalls:
+    """A call to a mutating method is a weak update of its receiver's root name
+    (#75): the statement defines it, and already reads it."""
+
+    @pytest.mark.parametrize(
+        "method", sorted(language_visitor("python").MUTATING_METHODS)
+    )
+    def test_python_mutating_methods_define_their_receiver(self, method):
+        node = node_of("python", f"items.{method}(x)\n", "items.")
+
+        assert node.metadata.variable_definitions == ["items"]
+        assert "items" in node.metadata.variable_uses
+
+    @pytest.mark.parametrize(
+        "method", sorted(language_visitor("java").MUTATING_METHODS)
+    )
+    def test_java_mutating_methods_define_their_receiver(self, method):
+        source = f"class A {{ void f(Obj items, int x) {{ items.{method}(x); }} }}"
+        node = node_of("java", source, "items.")
+
+        assert node.metadata.variable_definitions == ["items"]
+
+    @pytest.mark.parametrize(
+        "language, source, statement",
+        [
+            ("python", "items.count(x)\n", "items."),
+            ("python", "os.system(x)\n", "os."),
+            ("python", "logger.info(x)\n", "logger."),
+            ("python", "append(x)\n", "append"),
+            ("python", "get().append(x)\n", "get"),
+            ("java", "class A { void f() { System.out.println(x); } }", "System"),
+            ("java", "class A { void f() { this.items.add(x); } }", "this"),
+            ("java", "class A { void f() { map.get(k).put(a, b); } }", "map"),
+            ("c", "void f() { add(x); }", "add"),
+        ],
+    )
+    def test_other_calls_define_nothing(self, language, source, statement):
+        assert node_of(language, source, statement).metadata.variable_definitions == []
+
+    @pytest.mark.parametrize(
+        "statement, root",
+        [
+            ("self.items.append(x)", "self"),
+            ('d["k"].append(x)', "d"),
+            ("sb.append(a).append(b)", "sb"),
+            ("y = items.pop() or items.append(x)", "items"),
+        ],
+    )
+    def test_the_root_name_of_the_receiver_is_defined(self, statement, root):
+        node = node_of("python", f"{statement}\n", statement.split("(")[0][:4])
+
+        assert root in node.metadata.variable_definitions
+
+    def test_a_name_the_statement_already_defines_is_listed_once(self):
+        node = node_of("python", 'd["a"] = d.setdefault("k", [])\n', "d[")
+
+        assert node.metadata.variable_definitions == ["d"]
+
+    def test_the_earlier_definition_flows_through(self):
+        from python_cfg.cfg_helpers import def_use_chains
+
+        code = "items = []\nitems.append(x)\nprint(items)\n"
+
+        assert def_use_chains(code, "items") == {
+            "items = []": ["items.append(x)"],
+            "items.append(x)": ["print(items)"],
+        }
+
+    def test_a_mutated_global_reaches_other_functions(self):
+        from tree_climber.dataflow.interprocedural import analyze_interprocedural
+
+        builder = CFGBuilder("python")
+        builder.setup_parser()
+        cfg = builder.build_cfg(
+            "registry = []\n"
+            "def add(x):\n    registry.append(x)\n"
+            "def show():\n    print(registry)\n"
+        )
+        flows = {
+            (cfg.nodes[f.definition].source_text, cfg.nodes[f.use].source_text)
+            for f in analyze_interprocedural(cfg).free_variable_flows
+            if f.variable == "registry"
+        }
+
+        assert ("registry.append(x)", "print(registry)") in flows
 
 
 def node_of(language: str, source: str, statement: str) -> CFGNode:

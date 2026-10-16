@@ -338,7 +338,7 @@ Def-use chains
   items: items[0] = 1 => print(items)
 ```
 
-Check: `items[0] = 1` both uses and defines `items` (a weak update), so the original definition still flows through it. The dataflow framework supports only strong updates, so this convention keeps earlier definitions alive. Attribute writes (`obj.f = v`) behave the same.
+Check: `items[0] = 1` both uses and defines `items` (a weak update), so the original definition still flows through it. The dataflow framework supports only strong updates, so this convention keeps earlier definitions alive. Attribute writes (`obj.f = v`) behave the same, and so does a call to a method that changes its receiver: `items.append(v)` defines `items` (and `self.items.append(v)` defines `self`). The methods are `append`, `extend`, `insert`, `add`, `update`, `setdefault`, `appendleft` and `extendleft` (in Java: `add`, `addAll`, `addFirst`, `addLast`, `put`, `putAll`, `putIfAbsent`, `append`, `insert`, `set`, `push`, `offer`, `offerFirst`, `offerLast`); other calls, and a receiver that is a call result (`get().append(v)`), define nothing.
 
 ### match
 
@@ -920,7 +920,7 @@ Check, and what is approximate:
 - the data-flow model is statement-level, like the def-use chains: every variable a statement uses flows into every variable it defines (`cmd = build(name)` makes `cmd` depend on `build` as well as `name`). Extra edges are the exception: they follow the variable they name;
 - flow queries follow call and return edges like any other edge, and a path need not return to the call site it entered from. Pass `exclude=CALL_KINDS` to stay inside one function. Calls are linked by name, so `obj.f()` reaches every function named `f`;
 - slices and data-flow paths do not cross calls unless you pass `extra_edges` (`graph.interprocedural_edges()` for all calls in the file); they have no control dependence unless you pass `control=True` (see [Control dependence](#control-dependence));
-- a weak update (`d["k"] = v`, `obj.f = v`) defines and uses the root name, so a path continues through it, as in the def-use chains;
+- a weak update (`d["k"] = v`, `obj.f = v`, `items.append(v)`) defines and uses the root name, so a path continues through it, as in the def-use chains;
 - `paths` and `data_flow_paths` are depth first, cut off at `max_paths`, and `shortest_path` breaks ties toward lower node ids; none of them knows whether a path is feasible.
 
 ### Taint analysis
@@ -1005,7 +1005,7 @@ the rule above reports one finding, from the parameter: `calculate -> return eva
 
 How taint moves:
 - inside a statement, call results are worked out innermost first: a source call is tainted, a sanitizer is clean, a call to a function defined in the file is tainted when one of its `return`s is, and any other call passes on the taint of its arguments and receiver (`x.strip()`, `clean(x)`);
-- a variable a call is assigned to takes the call's taint; other definitions take the statement's (a tainted variable read outside any call, or a tainted call that is not inside another); a weak update (`d["k"] = ...`, `x += ...`) keeps the earlier taint;
+- a variable a call is assigned to takes the call's taint; other definitions take the statement's (a tainted variable read outside any call, or a tainted call that is not inside another); a weak update (`d["k"] = ...`, `x += ...`, `items.append(...)`) keeps the earlier taint;
 - between statements, def-use chains (so a reassignment on every path kills the taint) and the flows of [Data flow between functions](#data-flow-between-functions): arguments into parameters, returns into callers, closures and globals;
 - each source occurrence is followed on its own, so each finding has one source; a sink argument reached from one source by several paths is one finding, with the first path found.
 
@@ -1038,7 +1038,7 @@ for finding in analyze_source("python", code.lstrip(), rule, field_sensitive=Tru
 Without the option, both `system` calls are reported.
 
 Check, and what is approximate:
-- over-approximations: unknown calls pass taint through; a container or object is one value unless `field_sensitive` (`d["k"] = tainted` taints `d`, `self.x = tainted` taints `self`); closures and globals are flow-insensitive; calls are resolved by name, and a function is analysed once for all its callers: with `def wrap(a): return a`, `t = wrap(input())` makes every `wrap(...)` result tainted, so `system(wrap("safe"))` is reported too;
+- over-approximations: unknown calls pass taint through; a container or object is one value unless `field_sensitive` (`d["k"] = tainted` taints `d`, `self.x = tainted` taints `self`, `items.append(tainted)` taints `items`); closures and globals are flow-insensitive; calls are resolved by name, and a function is analysed once for all its callers: with `def wrap(a): return a`, `t = wrap(input())` makes every `wrap(...)` result tainted, so `system(wrap("safe"))` is reported too;
 - under-approximations: aliasing (two names for one object), output parameters (C's `fgets(buf, ...)` or `snprintf(cmd, ...)` do not taint `buf` or `cmd`), dynamic features (`getattr`, `exec` of strings), calls through function pointers, and branching on tainted data unless `implicit_flows`; Java writes into fields and arrays define nothing in the CFG (#32), so taint written there is lost with or without `field_sensitive`;
 - attribute sources are matched as text in the statement, outside string literals and comments.
 

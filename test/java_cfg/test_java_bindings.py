@@ -95,7 +95,8 @@ class TestDefUseChains:
 
     def test_parameter_flows_to_calls_made_on_it(self):
         assert def_use_chains(self.CODE, "list") == {
-            "f": ["list.add(x);", "return list.size();"]
+            "f": ["list.add(x);"],
+            "list.add(x);": ["return list.size();"],
         }
 
     def test_argument_still_flows(self):

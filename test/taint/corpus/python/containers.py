@@ -1,9 +1,10 @@
 """
 Flows through containers, with the default settings: a write into a
-subscript or attribute taints the whole value (weak update, the earlier
-taint is kept), reads of any element are tainted, and values put in by a
-method call are lost. field_sensitive.py runs the same shapes with
-`field_sensitive`.
+subscript or attribute, or a call to a mutating method (`append`, `extend`,
+`add`, `update`...), taints the whole value (weak update, the earlier taint is
+kept), and reads of any element are tainted. A method that is not on the list,
+or a receiver that is a call result, does not taint it. field_sensitive.py
+runs the subscript and attribute shapes with `field_sensitive`.
 """
 
 import os
@@ -42,8 +43,60 @@ def attribute_write(config):
 def appended():
     commands = []
     commands.append(input())
-    # todoruleid: python-command-injection -- a method call does not define its receiver, so what append puts in is lost (#75)
+    # ruleid: python-command-injection
     os.system(commands[0])
+
+
+def extended():
+    words = ["ls"]
+    words.extend(input().split())
+    # ruleid: python-command-injection
+    os.system(" ".join(words))
+
+
+def updated():
+    env = {"HOME": "/tmp"}
+    env.update(PATH=input())
+    # ruleid: python-command-injection
+    os.system(env["PATH"])
+
+
+def added_to_an_attribute(self):
+    self.hosts.add(input())
+    # ruleid: python-command-injection
+    os.system(" ".join(self.hosts))
+
+
+def kept_across_a_clean_append():
+    commands = [input()]
+    commands.append("true")
+    # ruleid: python-command-injection
+    os.system(commands[0])
+
+
+def other_methods():
+    commands = []
+    commands.count(input())
+    # ok: python-command-injection
+    os.system(" ".join(commands))
+
+
+def receiver_is_a_call(table):
+    table.get("commands").append(input())
+    # todoruleid: python-command-injection -- only a receiver read by name is updated, not one a call returns (table.get(...))
+    os.system(" ".join(table["commands"]))
+
+
+registry = []
+
+
+def register():
+    registry.append(input())
+
+
+def run_registered():
+    # ruleid: python-command-injection
+    os.system(registry[0])
 
 
 def iterated():
