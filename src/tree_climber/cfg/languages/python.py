@@ -83,6 +83,18 @@ class PythonCFGVisitor(CFGVisitor):
     """Python-specific CFG visitor implementation"""
 
     MODULE_NAME = "<module>"
+    MUTATING_METHODS = frozenset(
+        {
+            "append",
+            "extend",
+            "insert",
+            "add",
+            "update",
+            "setdefault",
+            "appendleft",
+            "extendleft",
+        }
+    )
 
     def __init__(self) -> None:
         super().__init__()

@@ -34,6 +34,25 @@ from tree_climber.cfg.visitor import CFGVisitor
 class JavaCFGVisitor(CFGVisitor):
     """Java-specific CFG visitor implementation"""
 
+    MUTATING_METHODS = frozenset(
+        {
+            "add",
+            "addAll",
+            "addFirst",
+            "addLast",
+            "put",
+            "putAll",
+            "putIfAbsent",
+            "append",
+            "insert",
+            "set",
+            "push",
+            "offer",
+            "offerFirst",
+            "offerLast",
+        }
+    )
+
     # Helper methods
     def _create_condition_node(self, condition_node: Node, node_type: NodeType) -> int:
         """Create a condition/header node with proper text."""

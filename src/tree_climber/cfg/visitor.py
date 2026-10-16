@@ -1,5 +1,6 @@
 import abc
-from typing import Any, Dict, List, Optional
+import re
+from typing import Any, Dict, FrozenSet, List, Optional
 
 from tree_sitter import Node
 
@@ -179,6 +180,10 @@ class CFG:
 class CFGVisitor(abc.ABC):
     """Base visitor class for CFG construction using visitor pattern"""
 
+    MUTATING_METHODS: FrozenSet[str] = frozenset()
+    """Methods that change their receiver (`append`, `put`): a call to one is a
+    weak update of the receiver's root name."""
+
     def __init__(self):
         self.context = ControlFlowContext()
         self.cfg = CFG(self.context)
@@ -220,15 +225,32 @@ class CFGVisitor(abc.ABC):
         # Link extra node metadata
         if node.ast_node is not None:
             call_sites = self.get_call_sites(node.ast_node)
+            definitions = self.get_definitions(node.ast_node)
+            for name in self._mutated_receivers(call_sites):
+                if name not in definitions:
+                    definitions.append(name)
             node.metadata = CFGNodeMetadata(
                 function_calls=[s.callee for s in call_sites if s.callee is not None],
-                variable_definitions=self.get_definitions(node.ast_node),
+                variable_definitions=definitions,
                 variable_uses=self.get_uses(node.ast_node),
                 call_sites=call_sites,
                 direct_uses=self.get_direct_uses(node.ast_node),
             )
 
         return node_id
+
+    def _mutated_receivers(self, call_sites: List[CallSite]) -> List[str]:
+        """The root names of the receivers of mutating method calls: `items` in
+        `items.append(x)`, `self` in `self.items.append(x)`, but nothing for a
+        receiver that is a call result (`get().append(x)`)."""
+        names = []
+        for site in call_sites:
+            if site.callee not in self.MUTATING_METHODS or site.receiver is None:
+                continue
+            root = re.match(r"[A-Za-z_]\w*", site.receiver)
+            if root is not None and root.group() in (site.receiver_uses or []):
+                names.append(root.group())
+        return names
 
     def visit(self, node: Node) -> CFGTraversalResult:
         """

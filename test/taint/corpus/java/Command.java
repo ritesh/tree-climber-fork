@@ -1,9 +1,8 @@
 /*
  * Command injection with the built-in Java rules (`*.exec`), and the
  * documented Java approximations: writes into fields and array elements
- * define nothing (#32), a `StringBuilder` filled by `append` is not tainted
- * (a method call does not define its receiver), and unknown calls pass taint
- * through.
+ * define nothing (#32), a call to a mutating method (`append`, `add`, `put`...)
+ * taints its receiver, and unknown calls pass taint through.
  */
 import java.io.IOException;
 import javax.servlet.http.HttpServletRequest;
@@ -37,7 +36,22 @@ public class Command {
     void builder(HttpServletRequest request) throws IOException {
         StringBuilder command = new StringBuilder("ping ");
         command.append(request.getParameter("host"));
-        // todoruleid: java-command-injection -- append does not define its receiver, so what it adds is lost (#75)
+        // ruleid: java-command-injection
+        Runtime.getRuntime().exec(command.toString());
+    }
+
+    void list(HttpServletRequest request) throws IOException {
+        java.util.List<String> argv = new java.util.ArrayList<>();
+        argv.add("ping");
+        argv.add(request.getParameter("host"));
+        // ruleid: java-command-injection
+        Runtime.getRuntime().exec(argv.toArray(new String[0]));
+    }
+
+    void cleanBuilder(HttpServletRequest request) throws IOException {
+        StringBuilder command = new StringBuilder("uptime");
+        command.append(" -p");
+        // ok: java-command-injection
         Runtime.getRuntime().exec(command.toString());
     }
 

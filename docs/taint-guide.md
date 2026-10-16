@@ -403,7 +403,7 @@ The analysis is approximate in both directions. What it misses, and what to do a
 
 What it reports that may be safe:
 - **Calls it does not know pass taint through.** `int(x)` or `len(x)` of a tainted value is tainted. Add such calls as sanitizers if their results are safe for your sinks.
-- **Containers and objects are one value**, unless `field_sensitive=True`: `d["k"] = tainted` taints all of `d`, and `self.x = tainted` taints `self`.
+- **Containers and objects are one value**, unless `field_sensitive=True`: `d["k"] = tainted` taints all of `d`, `self.x = tainted` taints `self`, and a mutating method call such as `items.append(tainted)` (or Java's `sb.append(tainted)`) taints `items`.
 - **A function is analysed once for all callers.** If one call of `def wrap(a): return a` gets tainted data, every `wrap(...)` result is tainted.
 - **Sinks cannot look at other arguments.** `subprocess.run(args, shell=False)` is reported like `shell=True`; a rule cannot tell them apart.
 
