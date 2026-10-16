@@ -668,97 +668,6 @@ class TestJava:
         assert source[site.start_byte : site.end_byte] == "g(1)"
 
 
-def node_of(language: str, source: str, statement: str) -> CFGNode:
-    builder = CFGBuilder(language)
-    builder.setup_parser()
-    cfg = builder.build_cfg(source)
-    (node,) = [n for n in cfg.nodes.values() if n.source_text.startswith(statement)]
-    return node
-
-
-def direct(language: str, statement: str):
-    """(the node's direct uses, each site's (receiver uses, arguments' direct uses))."""
-    if language == "python":
-        source = f"{statement}\n"
-    elif language == "c":
-        source = f"void f() {{ int x, y, z, d; {statement} }}"
-    else:
-        source = f"class A {{ void f() {{ int x = 0, y = 0, z = 0; {statement} }} }}"
-    node = node_of(language, source, statement)
-    return node.metadata.direct_uses, [
-        (site.receiver_uses, [a.direct_uses for a in site.arguments])
-        for site in node.metadata.call_sites
-    ]
-
-
-class TestDirectUses:
-    @pytest.mark.parametrize("language", ["c", "java", "python"])
-    def test_a_use_inside_a_call_is_not_direct(self, language):
-        end = "" if language == "python" else ";"
-        node_direct, sites = direct(language, f"y = x + escape(z){end}")
-
-        assert node_direct == ["x"]
-        assert sites == [(None, [["z"]])]
-
-    @pytest.mark.parametrize("language", ["c", "java", "python"])
-    def test_an_argument_that_is_a_call_reads_nothing_directly(self, language):
-        end = "" if language == "python" else ";"
-        node_direct, sites = direct(language, f"eval(escape(x)){end}")
-
-        assert node_direct == []
-        assert sites == [(None, [[]]), (None, [["x"]])]
-
-    @pytest.mark.parametrize("language", ["c", "java", "python"])
-    def test_a_variable_inside_and_outside_a_call_is_direct(self, language):
-        end = "" if language == "python" else ";"
-        _, sites = direct(language, f"eval(x + escape(x)){end}")
-
-        assert sites[0] == (None, [["x"]])
-
-    @pytest.mark.parametrize("language", ["c", "java"])
-    def test_occurrences_two_calls_deep_are_not_direct(self, language):
-        _, sites = direct(language, "eval(x + f(g(x)));")
-
-        assert sites[0] == (None, [["x"]])
-        assert direct(language, "eval(f(g(x)));")[1][0] == (None, [[]])
-
-    def test_receivers(self):
-        assert direct("python", "t = escape(x).strip()")[1][0] == ([], [])
-        assert direct("python", "t = x.strip(y)")[1] == [(["x"], [["y"]])]
-        assert direct("java", "x.run(y).go(z);")[1] == [([], [["z"]]), (["x"], [["y"]])]
-        assert direct("c", "d->cb(x).g(y);")[1] == [([], [["y"]]), (["d"], [["x"]])]
-
-    def test_python_keyword_and_star_arguments(self):
-        _, sites = direct("python", "f(*xs, k=escape(y) + z, **kw)")
-
-        assert sites[0] == (None, [["xs"], ["z"], ["kw"]])
-
-    def test_python_weak_updates_read_the_root_directly(self):
-        assert direct("python", 'd["k"] = escape(x)')[0] == ["d"]
-        assert direct("python", "x += escape(w)")[0] == ["x"]
-        assert direct("python", "x = escape(x)")[0] == []
-
-    def test_python_for_headers(self):
-        source = "for a in escape(x):\n    pass\nfor d[i] in g(x):\n    pass\n"
-        assert node_of("python", source, "for a in").metadata.direct_uses == []
-        assert node_of("python", source, "for d[i]").metadata.direct_uses == ["i", "d"]
-
-    def test_python_definitions_are_not_known(self):
-        node = node_of("python", "@deco(x)\ndef f(a=g(y)):\n    pass\n", "@deco")
-
-        assert node.metadata.direct_uses is None
-
-    def test_python_case_patterns_have_no_calls(self):
-        source = (
-            "match v:\n    case Color.RED:\n        pass\n    case [a]:\n        pass\n"
-        )
-        case = node_of("python", source, "case Color.RED")
-        capture = node_of("python", source, "capture a")
-
-        assert case.metadata.direct_uses == case.metadata.variable_uses == ["Color"]
-        assert capture.metadata.direct_uses == []
-
-
 def language_visitor(language: str):
     return create_visitor(language)
 
@@ -848,3 +757,94 @@ class TestMutatingCalls:
         }
 
         assert ("registry.append(x)", "print(registry)") in flows
+
+
+def node_of(language: str, source: str, statement: str) -> CFGNode:
+    builder = CFGBuilder(language)
+    builder.setup_parser()
+    cfg = builder.build_cfg(source)
+    (node,) = [n for n in cfg.nodes.values() if n.source_text.startswith(statement)]
+    return node
+
+
+def direct(language: str, statement: str):
+    """(the node's direct uses, each site's (receiver uses, arguments' direct uses))."""
+    if language == "python":
+        source = f"{statement}\n"
+    elif language == "c":
+        source = f"void f() {{ int x, y, z, d; {statement} }}"
+    else:
+        source = f"class A {{ void f() {{ int x = 0, y = 0, z = 0; {statement} }} }}"
+    node = node_of(language, source, statement)
+    return node.metadata.direct_uses, [
+        (site.receiver_uses, [a.direct_uses for a in site.arguments])
+        for site in node.metadata.call_sites
+    ]
+
+
+class TestDirectUses:
+    @pytest.mark.parametrize("language", ["c", "java", "python"])
+    def test_a_use_inside_a_call_is_not_direct(self, language):
+        end = "" if language == "python" else ";"
+        node_direct, sites = direct(language, f"y = x + escape(z){end}")
+
+        assert node_direct == ["x"]
+        assert sites == [(None, [["z"]])]
+
+    @pytest.mark.parametrize("language", ["c", "java", "python"])
+    def test_an_argument_that_is_a_call_reads_nothing_directly(self, language):
+        end = "" if language == "python" else ";"
+        node_direct, sites = direct(language, f"eval(escape(x)){end}")
+
+        assert node_direct == []
+        assert sites == [(None, [[]]), (None, [["x"]])]
+
+    @pytest.mark.parametrize("language", ["c", "java", "python"])
+    def test_a_variable_inside_and_outside_a_call_is_direct(self, language):
+        end = "" if language == "python" else ";"
+        _, sites = direct(language, f"eval(x + escape(x)){end}")
+
+        assert sites[0] == (None, [["x"]])
+
+    @pytest.mark.parametrize("language", ["c", "java"])
+    def test_occurrences_two_calls_deep_are_not_direct(self, language):
+        _, sites = direct(language, "eval(x + f(g(x)));")
+
+        assert sites[0] == (None, [["x"]])
+        assert direct(language, "eval(f(g(x)));")[1][0] == (None, [[]])
+
+    def test_receivers(self):
+        assert direct("python", "t = escape(x).strip()")[1][0] == ([], [])
+        assert direct("python", "t = x.strip(y)")[1] == [(["x"], [["y"]])]
+        assert direct("java", "x.run(y).go(z);")[1] == [([], [["z"]]), (["x"], [["y"]])]
+        assert direct("c", "d->cb(x).g(y);")[1] == [([], [["y"]]), (["d"], [["x"]])]
+
+    def test_python_keyword_and_star_arguments(self):
+        _, sites = direct("python", "f(*xs, k=escape(y) + z, **kw)")
+
+        assert sites[0] == (None, [["xs"], ["z"], ["kw"]])
+
+    def test_python_weak_updates_read_the_root_directly(self):
+        assert direct("python", 'd["k"] = escape(x)')[0] == ["d"]
+        assert direct("python", "x += escape(w)")[0] == ["x"]
+        assert direct("python", "x = escape(x)")[0] == []
+
+    def test_python_for_headers(self):
+        source = "for a in escape(x):\n    pass\nfor d[i] in g(x):\n    pass\n"
+        assert node_of("python", source, "for a in").metadata.direct_uses == []
+        assert node_of("python", source, "for d[i]").metadata.direct_uses == ["i", "d"]
+
+    def test_python_definitions_are_not_known(self):
+        node = node_of("python", "@deco(x)\ndef f(a=g(y)):\n    pass\n", "@deco")
+
+        assert node.metadata.direct_uses is None
+
+    def test_python_case_patterns_have_no_calls(self):
+        source = (
+            "match v:\n    case Color.RED:\n        pass\n    case [a]:\n        pass\n"
+        )
+        case = node_of("python", source, "case Color.RED")
+        capture = node_of("python", source, "capture a")
+
+        assert case.metadata.direct_uses == case.metadata.variable_uses == ["Color"]
+        assert capture.metadata.direct_uses == []
