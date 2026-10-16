@@ -18,10 +18,12 @@ from cfg_helpers import (
 
 from tree_climber.ast_utils import parse_source_to_ast
 from tree_climber.cfg.cfg_types import NodeType
+from tree_climber.cfg.languages.python import MATCH_SUBJECT
 from tree_climber.cfg.languages.python_bindings import (
     collect_pattern_bindings,
     is_irrefutable_pattern,
 )
+from tree_climber.dataflow.interprocedural import analyze_interprocedural
 
 ENTRY = "ENTRY:<module>"
 EXIT = "EXIT:<module>"
@@ -191,6 +193,67 @@ class TestCaptures:
         chains = def_use_chains("v = f()\nmatch v:\n    case 1:\n        pass\n", "v")
 
         assert chains == {"v = f()": ["match v"]}
+
+    def test_a_capture_reads_a_named_subject(self):
+        code = "v = f()\nmatch v:\n    case [a]:\n        g(a)\n"
+
+        assert def_use_chains(code, "v") == {"v = f()": ["capture a", "match v"]}
+        cfg = build_cfg(code)
+        capture = node_by_text(cfg, "capture a")
+        assert capture.metadata.variable_uses == capture.metadata.direct_uses == ["v"]
+        assert node_by_text(cfg, "match v").metadata.variable_definitions == []
+
+    def test_a_capture_reads_an_expression_subject_through_the_head(self):
+        code = "match f(x).y:\n    case [a]:\n        g(a)\n    case b:\n        h(b)\n"
+
+        assert def_use_chains(code, MATCH_SUBJECT) == {
+            "match f(x).y": ["capture a", "capture b"]
+        }
+        assert def_use_chains(code, "a") == {"capture a": ["g(a)"]}
+        cfg = build_cfg(code)
+        head = node_by_text(cfg, "match f(x).y")
+        assert head.metadata.variable_definitions == [MATCH_SUBJECT]
+        assert head.metadata.variable_uses == ["f", "x"]
+        assert node_by_text(cfg, "case [a]").metadata.variable_uses == []
+
+    def test_a_nested_match_reads_its_own_subject(self):
+        code = (
+            "match f():\n"
+            "    case [a]:\n"
+            "        match g():\n"
+            "            case [b]:\n"
+            "                pass\n"
+            "    case c:\n"
+            "        pass\n"
+        )
+
+        assert def_use_chains(code, MATCH_SUBJECT) == {
+            "match f()": ["capture a", "capture c"],
+            "match g()": ["capture b"],
+        }
+
+    def test_the_subject_name_is_local_to_its_function(self):
+        code = (
+            "def one():\n    match f():\n        case [a]:\n            pass\n"
+            "def two():\n    match g():\n        case [b]:\n            pass\n"
+            "def three():\n    match v:\n        case [c]:\n            pass\n"
+        )
+        cfg = build_cfg(code)
+
+        locals_ = {
+            node.source_text: node.metadata.function.locals
+            for node in cfg.nodes.values()
+            if node.node_type == NodeType.ENTRY
+            and node.source_text != "<module>"
+            and node.metadata.function is not None
+        }
+        assert locals_ == {
+            "one": ["a", MATCH_SUBJECT],
+            "two": ["b", MATCH_SUBJECT],
+            "three": ["c"],
+        }
+        flows = analyze_interprocedural(cfg).free_variable_flows
+        assert not [f for f in flows if f.variable == MATCH_SUBJECT]
 
 
 class TestJumps:

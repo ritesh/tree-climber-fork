@@ -755,4 +755,4 @@ class TestDirectUses:
         capture = node_of("python", source, "capture a")
 
         assert case.metadata.direct_uses == case.metadata.variable_uses == ["Color"]
-        assert capture.metadata.direct_uses == []
+        assert capture.metadata.direct_uses == capture.metadata.variable_uses == ["v"]

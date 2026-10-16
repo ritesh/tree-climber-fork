@@ -58,6 +58,7 @@ from tree_climber.cfg.visitor import CFGVisitor
 NON_RAISING_STATEMENTS = frozenset(
     {"pass_statement", "global_statement", "nonlocal_statement"}
 )
+MATCH_SUBJECT = "<match subject>"
 
 
 @dataclass
@@ -417,6 +418,14 @@ class PythonCFGVisitor(CFGVisitor):
                         definition, f"{qualifier}.{get_source_text(nested_name)}"
                     )
 
+    def _add_local(self, name: str) -> None:
+        """Make a name local to the function being visited."""
+        if not self.context.entry_node_ids:
+            return
+        info = self.cfg.nodes[self.context.entry_node_ids[-1]].metadata.function
+        if info is not None and info.locals is not None and name not in info.locals:
+            info.locals.append(name)
+
     def _function_info(
         self,
         node: Node,
@@ -611,8 +620,10 @@ class PythonCFGVisitor(CFGVisitor):
         The subject is evaluated once by a SWITCH_HEAD node. Each `case` is a
         CONDITION node holding its pattern: `true` enters the body and `false`
         tries the next case. Names a pattern captures are defined by a `capture`
-        node on the `true` edge, so a failed match leaves them untouched. A guard
-        is its own CONDITION node after the capture, and its `false` edge also
+        node on the `true` edge, so a failed match leaves them untouched; the
+        capture reads the subject: the subject's name, or `<match subject>`,
+        which the head defines when the subject is an expression. A guard is
+        its own CONDITION node after the capture, and its `false` edge also
         tries the next case. No case falls through, and when no case is
         irrefutable the last `false` edge skips the match.
         """
@@ -622,6 +633,12 @@ class PythonCFGVisitor(CFGVisitor):
         head_id = self.create_node(
             NodeType.SWITCH_HEAD, subject, f"match {get_source_text(subject)}"
         )
+        if subject.type == "identifier":
+            subject_name = get_source_text(subject)
+        else:
+            subject_name = MATCH_SUBJECT
+            self.cfg.nodes[head_id].metadata.variable_definitions.append(MATCH_SUBJECT)
+            self._add_local(MATCH_SUBJECT)
         join_id = self.create_node(NodeType.EXIT, source_text="EXIT: match stmt")
 
         pending: List[Tuple[int, Optional[str]]] = [(head_id, None)]
@@ -659,8 +676,8 @@ class PythonCFGVisitor(CFGVisitor):
                 self._cannot_raise.add(capture_id)
                 metadata = self.cfg.nodes[capture_id].metadata
                 metadata.variable_definitions = bindings.definitions
-                metadata.variable_uses = []
-                metadata.direct_uses = []
+                metadata.variable_uses = [subject_name]
+                metadata.direct_uses = [subject_name]
                 metadata.function_calls = []
                 metadata.call_sites = []
                 self.cfg.add_edge(case_id, capture_id, "true")

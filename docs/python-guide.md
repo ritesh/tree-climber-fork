@@ -372,7 +372,7 @@ CFG edges
   result = None -> return result
   return result -> EXIT:handle
 Def-use chains
-  cmd: ENTRY:handle => match cmd
+  cmd: ENTRY:handle => match cmd, capture name, args, capture code
   name: capture name, args => if name, result = name
   code: capture code => result = code
   result: result = code => return result
@@ -382,7 +382,7 @@ Def-use chains
 
 Check:
 - the subject is evaluated once, by the `match cmd` node, and the cases are tried in order through `false` edges;
-- a pattern that binds names gets a `capture` node on its `true` edge, so a failed match does not redefine them;
+- a pattern that binds names gets a `capture` node on its `true` edge, so a failed match does not redefine them. The capture reads the subject, so the names it binds depend on it: here it uses `cmd`. When the subject is an expression (`match command.split():`), the `match` node defines a synthetic local, `<match subject>`, and each capture uses that instead, so the subject's calls are not repeated;
 - a guard is its own `if` node, and its `false` edge also tries the next case (the names stay bound);
 - `case _` is irrefutable, so it has no `false` edge. Without it, the last case's `false` edge would skip to the code after the `match`;
 - nothing falls through from one body to the next, and `break`/`continue` in a case target the enclosing loop.
