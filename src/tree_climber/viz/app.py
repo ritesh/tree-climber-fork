@@ -6,19 +6,15 @@ and return their Control Flow Graph (CFG) representation in JSON format.
 
 import logging
 import os
+from functools import lru_cache
 from typing import Any, Dict, List, Literal, Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, field_validator
 
 from tree_climber.ast_utils import ast_to_json
 from tree_climber.cfg.builder import CFGBuilder
-from tree_climber.dataflow.analyses.def_use import DefUseSolver
-from tree_climber.dataflow.analyses.reaching_definitions import (
-    ReachingDefinitionsProblem,
-)
-from tree_climber.dataflow.solver import WorklistSolver
 from tree_climber.language_registry import (
     DEFAULT_LANGUAGE,
     SUPPORTED_LANGUAGES,
@@ -43,6 +39,9 @@ CORS_ORIGINS = [
     "http://127.0.0.1:5173",
     "http://127.0.0.1:5174",
 ]
+
+# Graphs kept for recent texts: one editor text and a few others
+GRAPH_CACHE_SIZE = 4
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -165,6 +164,14 @@ class QueryResponse(BaseModel):
     )
 
 
+@lru_cache(maxsize=GRAPH_CACHE_SIZE)
+def code_graph(language: str, source: str) -> CodeGraph:
+    """The graph of the source, shared by `/parse`, `/taint` and `/query`, so
+    that the editor's requests for one text build and analyse it once. The
+    graph and its cached analyses are only read."""
+    return CodeGraph.from_source(language, source)
+
+
 @app.get("/")
 async def root():
     """Root endpoint providing API information"""
@@ -203,46 +210,26 @@ def parse_source_code(request: ParseRequest) -> ParseResponse:
             f"Parsing {len(request.source_code)} bytes of {request.language} code"
         )
 
-        # Create and setup CFG builder
-        builder = CFGBuilder(request.language)
-        builder.setup_parser()
-        if not builder.parser:
-            raise HTTPException(
-                status_code=500,
-                detail=f"Parser for {request.language} not set up correctly.",
-            )
+        ast_dict = None
+        if request.include_ast:
+            builder = CFGBuilder(request.language)
+            builder.setup_parser()
+            assert builder.parser is not None
+            tree = builder.parser.parse(bytes(request.source_code, "utf8"))
+            ast_dict = ast_to_json(tree.root_node)
 
-        # Parse source code to get AST
-        tree = builder.parser.parse(bytes(request.source_code, "utf8"))
-        if not tree:
-            raise HTTPException(status_code=400, detail="Failed to parse source code.")
-
-        # Convert AST to dictionary for JSON serialization
-        ast_dict = ast_to_json(tree.root_node) if request.include_ast else None
-
-        # Build CFG from AST
-        cfg = builder.build_cfg(tree=tree)
-
+        graph = code_graph(request.language, request.source_code)
+        cfg = graph.cfg
         logger.info(
             f"CFG built successfully: function={cfg.function_name}, "
             f"nodes={len(cfg.nodes)}"
         )
 
-        # Analyze reaching definitions
-        problem = ReachingDefinitionsProblem()
-
-        solver = WorklistSolver()
-        result = solver.solve(cfg, problem)
-
-        # Analyze def-use chains
-        def_use_analyzer = DefUseSolver()
-        def_use_result = def_use_analyzer.solve(cfg, result)
-
-        # Convert CFG to JSON-serializable dictionary
-        cfg_dict = cfg.to_dict()
-
         return ParseResponse(
-            success=True, cfg=cfg_dict, ast=ast_dict, dfg=def_use_result.to_dict()
+            success=True,
+            cfg=cfg.to_dict(),
+            ast=ast_dict,
+            dfg=graph.def_use_chains.to_dict(),
         )
 
     except Exception as e:
@@ -259,8 +246,9 @@ def taint_source_code(request: TaintRequest) -> TaintResponse:
             rules = load_rules(BUILTIN_RULES, request.language)
         else:
             rules = rules_from_dict(request.rules, request.language)
-        graph = CodeGraph.from_source(request.language, request.source_code)
-        findings = analyze(graph.cfg, rules, request.language)
+        findings = analyze(
+            code_graph(request.language, request.source_code), rules, request.language
+        )
         return TaintResponse(
             success=True, findings=[finding.to_dict() for finding in findings]
         )
@@ -273,7 +261,7 @@ def taint_source_code(request: TaintRequest) -> TaintResponse:
 def query_source_code(request: QueryRequest) -> QueryResponse:
     """Answer a query on source code. Node ids are those `/parse` returns."""
     try:
-        graph = CodeGraph.from_source(request.language, request.source_code)
+        graph = code_graph(request.language, request.source_code)
         if request.kind == "calls":
             if not request.names:
                 raise ValueError("A calls query needs names")

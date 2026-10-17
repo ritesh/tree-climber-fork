@@ -8,12 +8,14 @@ import re
 from dataclasses import dataclass
 from functools import cache
 from pathlib import Path
-from typing import FrozenSet, List, Optional, Tuple
+from typing import FrozenSet, List, Optional, Set, Tuple
 
 import pytest
 
 from tree_climber.cfg.builder import CFGBuilder
+from tree_climber.cfg.visitor import CFG
 from tree_climber.language_registry import language_for_extension
+from tree_climber.query import CodeGraph
 from tree_climber.reporting import node_line
 from tree_climber.taint import analyze, builtin_rules
 
@@ -66,16 +68,23 @@ def annotations(path: Path) -> List[Case]:
     return cases
 
 
-@cache
-def findings(path: Path) -> FrozenSet[Tuple[str, int]]:
-    source = path.read_text()
+def options_of(source: str) -> Set[str]:
     match = OPTIONS.search(source)
-    options = set(match.group(1).split()) if match else set()
+    return set(match.group(1).split()) if match else set()
+
+
+def build(path: Path) -> CFG:
     builder = CFGBuilder(language(path))
     builder.setup_parser()
-    cfg = builder.build_cfg(source)
+    return builder.build_cfg(path.read_text())
+
+
+@cache
+def findings(path: Path) -> FrozenSet[Tuple[str, int]]:
+    options = options_of(path.read_text())
+    cfg = build(path)
     found = analyze(
-        cfg,
+        CodeGraph(cfg),
         builtin_rules(language(path)),
         language(path),
         implicit_flows="implicit_flows" in options,
@@ -130,3 +139,20 @@ def test_every_finding_is_annotated(path: Path):
         if case.kind in ("ruleid", "todook")
     }
     assert sorted(findings(path) - expected) == []
+
+
+@pytest.mark.parametrize(
+    "path", [pytest.param(p, id=str(p.relative_to(CORPUS))) for p in FILES]
+)
+def test_a_code_graph_gives_the_findings_of_its_cfg(path: Path):
+    options = options_of(path.read_text())
+    cfg = build(path)
+    flags = dict(
+        implicit_flows="implicit_flows" in options,
+        field_sensitive="field_sensitive" in options,
+    )
+    rules = builtin_rules(language(path))
+
+    assert analyze(CodeGraph(cfg), rules, language(path), **flags) == analyze(
+        cfg, rules, language(path), **flags
+    )

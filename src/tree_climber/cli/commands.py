@@ -225,8 +225,9 @@ def run_taint(source: CodeSource, options: TaintOptions) -> None:
     """Report the findings of the rules on the source, and draw their paths."""
     rules = load_rules(options.rules, options.language)
     ast_root = _parse_source_string(source.get_content(), options.language)
-    cfg = _build_cfg(ast_root, options.language)
-    findings = analyze(cfg, rules, options.language)
+    graph = CodeGraph(_build_cfg(ast_root, options.language))
+    cfg = graph.cfg
+    findings = analyze(graph, rules, options.language)
     numbered = list(enumerate(findings, 1))
     if options.finding is not None:
         if not 1 <= options.finding <= len(findings):
@@ -248,7 +249,7 @@ def run_taint(source: CodeSource, options: TaintOptions) -> None:
 
     saved: List[Path] = []
     if options.draw_cfg or options.draw_dfg:
-        def_use = _analyze_dataflow(cfg) if options.draw_dfg else None
+        def_use = graph.def_use_chains if options.draw_dfg else None
         for number, finding in numbered:
             saved.extend(
                 _draw_finding(source, options, ast_root, cfg, def_use, number, finding)

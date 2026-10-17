@@ -24,6 +24,7 @@ from tree_climber.cli.source import StdinSource
 from tree_climber.cli.visualizers import CFGVisualizer, DFGVisualizer
 from tree_climber.cli.visualizers.constants import PATH_EDGE_COLOR, PATH_NODE_COLOR
 from tree_climber.cli.visualizers.utils import highlight_path
+from tree_climber.dataflow.solver import WorklistSolver
 from tree_climber.query import Path as Path_
 from tree_climber.query import PathStep
 from tree_climber.taint import analyze, builtin_rules
@@ -308,6 +309,21 @@ class TestTaint:
             "app.py_finding2_dfg.png",
         ]
         assert "Saved finding 2 on the DFG" in result.output
+
+    def test_drawing_the_dfg_solves_data_flow_once(self, in_tmp, monkeypatch):
+        solve = WorklistSolver.solve
+        calls = []
+
+        def counted(self, cfg, problem):
+            calls.append(cfg)
+            return solve(self, cfg, problem)
+
+        monkeypatch.setattr(WorklistSolver, "solve", counted)
+
+        result = invoke("taint", "app.py", "--finding", "1", "--draw-dfg")
+
+        assert result.exit_code == 0, result.output
+        assert len(calls) == 1
 
     def test_draw_in_another_format(self, in_tmp):
         result = invoke(

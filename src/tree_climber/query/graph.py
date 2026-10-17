@@ -26,6 +26,11 @@ from tree_climber.dataflow.control_dependence import (
     ControlDependence,
     control_dependence,
 )
+from tree_climber.dataflow.dataflow_types import DataflowResult
+from tree_climber.dataflow.interprocedural import (
+    InterproceduralResult,
+    analyze_interprocedural,
+)
 from tree_climber.dataflow.solver import WorklistSolver
 from tree_climber.query.edges import (
     CALL_KINDS,
@@ -343,16 +348,18 @@ class CodeGraph:
             raise ValueError("max_length must not be negative")
 
     @cached_property
-    def _reaching(self):
+    def reaching_definitions(self) -> DataflowResult:
+        """Reaching definitions, solved once. Read-only, like the analyses below:
+        every query and taint analysis on this graph shares them."""
         return WorklistSolver().solve(self.cfg, ReachingDefinitionsProblem())
 
     @cached_property
-    def _def_use(self) -> DefUseResult:
-        return DefUseSolver().solve(self.cfg, self._reaching)
+    def def_use_chains(self) -> DefUseResult:
+        return DefUseSolver().solve(self.cfg, self.reaching_definitions)
 
     @cached_property
     def _use_def(self) -> UseDefResult:
-        return UseDefSolver().solve(self.cfg, self._reaching)
+        return UseDefSolver().solve(self.cfg, self.reaching_definitions)
 
     def _fact_graph(self, extra_edges: ExtraEdges) -> FactGraph:
         extras = tuple(extra_edges or ())
@@ -369,7 +376,7 @@ class CodeGraph:
     def _build_facts(self, extras: Tuple[DataFlowEdge, ...]) -> FactGraph:
         chains = [
             (chain.variable_name, chain.definition, chain.uses)
-            for variable_chains in self._def_use.chains.values()
+            for variable_chains in self.def_use_chains.chains.values()
             for chain in variable_chains
         ]
         return FactGraph(self.nodes, chains, extras)
@@ -381,7 +388,7 @@ class CodeGraph:
         definitions that are used appear. Extra edges are listed under their
         source variable."""
         result: Dict[int, Set[int]] = {}
-        for chain in self._def_use.chains.get(variable, []):
+        for chain in self.def_use_chains.chains.get(variable, []):
             result.setdefault(chain.definition, set()).update(chain.uses)
         for edge in extra_edges or ():
             if edge.source_variable == variable:
@@ -407,8 +414,12 @@ class CodeGraph:
         return {node_id: sorted(defs) for node_id, defs in sorted(result.items())}
 
     @cached_property
+    def interprocedural_flows(self) -> InterproceduralResult:
+        return analyze_interprocedural(self.cfg)
+
+    @cached_property
     def _interprocedural(self) -> List[DataFlowEdge]:
-        return interprocedural_edges(self.cfg)
+        return interprocedural_edges(self.cfg, self.interprocedural_flows)
 
     def interprocedural_edges(self) -> List[DataFlowEdge]:
         """Argument, return and free-variable flows between functions, to pass as
@@ -421,7 +432,7 @@ class CodeGraph:
             DataFlowEdge(
                 chain.definition, chain.variable_name, use, chain.variable_name, DEF_USE
             )
-            for variable_chains in self._def_use.chains.values()
+            for variable_chains in self.def_use_chains.chains.values()
             for chain in variable_chains
             for use in chain.uses
         }
@@ -436,7 +447,7 @@ class CodeGraph:
         return ordered
 
     @cached_property
-    def _control(self) -> ControlDependence:
+    def control_dependence(self) -> ControlDependence:
         return control_dependence(self.cfg)
 
     def control_dependences(self, ref: NodeRef) -> List[Tuple[CFGNode, str]]:
@@ -445,12 +456,14 @@ class CodeGraph:
         or `flow`)."""
         return [
             (self.cfg.nodes[branch], label)
-            for branch, label in self._control.controllers.get(self._id(ref), [])
+            for branch, label in self.control_dependence.controllers.get(
+                self._id(ref), []
+            )
         ]
 
     def control_dependents(self, ref: NodeRef) -> List[CFGNode]:
         """The nodes whose running the node decides."""
-        return self._sorted(self._control.dependents.get(self._id(ref), []))
+        return self._sorted(self.control_dependence.dependents.get(self._id(ref), []))
 
     def forward_slice(
         self,
@@ -498,9 +511,11 @@ class CodeGraph:
         while pending:
             node_id = pending.pop()
             if forward:
-                linked = self._control.dependents.get(node_id, [])
+                linked = self.control_dependence.dependents.get(node_id, [])
             else:
-                linked = [b for b, _ in self._control.controllers.get(node_id, [])]
+                linked = [
+                    b for b, _ in self.control_dependence.controllers.get(node_id, [])
+                ]
             for other in linked:
                 if other in result:
                     continue

@@ -15,6 +15,7 @@ from tree_climber.viz.app import (
     ParseRequest,
     QueryRequest,
     TaintRequest,
+    code_graph,
     health_check,
     parse_source_code,
     query_source_code,
@@ -304,3 +305,37 @@ def test_parse_includes_the_ast_by_default():
 def test_only_parse_takes_include_ast():
     assert "include_ast" not in TaintRequest.model_fields
     assert "include_ast" not in QueryRequest.model_fields
+
+
+def test_the_same_text_shares_one_graph():
+    code_graph.cache_clear()
+
+    graph = code_graph("python", TAINTED)
+
+    assert code_graph("python", TAINTED) is graph
+    assert code_graph("python", TAINTED + "\n") is not graph
+    assert code_graph("c", C_SOURCE) is not code_graph("java", JAVA_SOURCE)
+
+
+def test_taint_and_query_after_parse_reuse_its_graph(monkeypatch):
+    code_graph.cache_clear()
+    parsed = parse_source_code(
+        ParseRequest.model_validate(
+            {"source_code": TAINTED, "language": "python", "include_ast": False}
+        )
+    )
+    assert parsed.success, parsed.error
+
+    def rebuilt(*args, **kwargs):
+        raise AssertionError("rebuilt")
+
+    monkeypatch.setattr("tree_climber.viz.app.CodeGraph.from_source", rebuilt)
+    monkeypatch.setattr("tree_climber.query.graph.WorklistSolver.solve", rebuilt)
+
+    findings = taint(source_code=TAINTED)
+    sliced = query(source_code=TAINTED, kind="calls", names=["os.system"])
+
+    assert findings.success, findings.error
+    assert findings.findings
+    assert sliced.success, sliced.error
+    assert sliced.nodes

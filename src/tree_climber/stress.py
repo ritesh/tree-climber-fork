@@ -24,47 +24,42 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
 
 from tree_climber.cfg.builder import CFGBuilder
-from tree_climber.cfg.visitor import CFG
-from tree_climber.dataflow.analyses.def_use import DefUseSolver
-from tree_climber.dataflow.analyses.reaching_definitions import (
-    ReachingDefinitionsProblem,
-)
-from tree_climber.dataflow.control_dependence import control_dependence
-from tree_climber.dataflow.interprocedural import analyze_interprocedural
-from tree_climber.dataflow.solver import WorklistSolver
 from tree_climber.language_registry import SUPPORTED_LANGUAGES, language_for_extension
+from tree_climber.query import CodeGraph
 from tree_climber.taint import analyze, builtin_rules
 
 
 @dataclass
 class Work:
+    """One file going through the stages. The stages share its `CodeGraph`, so
+    each one times only its own work: taint reuses the data flow, the
+    interprocedural flows and the control dependence of the stages before it."""
+
     language: str
     source: str
-    cfg: Optional[CFG] = None
+    code: Optional[CodeGraph] = None
 
-    def graph(self) -> CFG:
-        assert self.cfg is not None
-        return self.cfg
+    def graph(self) -> CodeGraph:
+        assert self.code is not None
+        return self.code
 
 
 def _build(work: Work) -> None:
     builder = CFGBuilder(work.language)
     builder.setup_parser()
-    work.cfg = builder.build_cfg(work.source)
+    work.code = CodeGraph(builder.build_cfg(work.source))
 
 
 def _dataflow(work: Work) -> None:
-    cfg = work.graph()
-    reaching = WorklistSolver().solve(cfg, ReachingDefinitionsProblem())
-    DefUseSolver().solve(cfg, reaching)
+    work.graph().def_use_chains
 
 
 def _interprocedural(work: Work) -> None:
-    analyze_interprocedural(work.graph())
+    work.graph().interprocedural_flows
 
 
 def _control(work: Work) -> None:
-    control_dependence(work.graph())
+    work.graph().control_dependence
 
 
 def _taint(work: Work) -> None:
@@ -165,7 +160,7 @@ def run_file(task: Task, stages: Sequence[str], timeout: float) -> FileResult:
             finally:
                 result.seconds[stage] = time.perf_counter() - start
             if stage == "cfg":
-                result.nodes = len(work.graph().nodes)
+                result.nodes = len(work.graph().cfg.nodes)
     except _Timeout:
         result.failure = Failure(stage, TIMEOUT, f"over {timeout:g} s")
     except Exception as error:

@@ -31,14 +31,8 @@ from tree_climber.cfg.builder import CFGBuilder
 from tree_climber.cfg.call_sites import preorder
 from tree_climber.cfg.cfg_types import CallSite, CFGNode, NodeType
 from tree_climber.cfg.visitor import CFG
-from tree_climber.dataflow.analyses.def_use import DefUseSolver
-from tree_climber.dataflow.analyses.reaching_definitions import (
-    ReachingDefinitionsProblem,
-)
-from tree_climber.dataflow.interprocedural import analyze_interprocedural
-from tree_climber.dataflow.solver import WorklistSolver
-from tree_climber.dataflow.control_dependence import control_dependence
 from tree_climber.query.edges import ARGUMENT, CONTROL, DEF_USE, FREE_VARIABLE, RETURN
+from tree_climber.query.graph import CodeGraph
 from tree_climber.query.path import Path, PathStep
 from tree_climber.taint.fields import Accesses, accesses
 from tree_climber.taint.rules import Rule, RuleSet, Source, call_matches
@@ -85,11 +79,16 @@ class _Origin:
 
 class _Program:
     """What every run over one CFG shares: def-use chains, interprocedural flows,
-    and the shape of each node's calls."""
+    and the shape of each node's calls. The data flow comes from the graph's
+    caches, so it is solved once per graph."""
 
     def __init__(
-        self, cfg: CFG, implicit_flows: bool = False, field_sensitive: bool = False
+        self,
+        graph: CodeGraph,
+        implicit_flows: bool = False,
+        field_sensitive: bool = False,
     ):
+        cfg = graph.cfg
         self.cfg = cfg
         self.field_sensitive = field_sensitive
         self._code: Dict[int, bytes] = {}
@@ -98,7 +97,7 @@ class _Program:
         self.cases: Dict[int, List[int]] = {}
         if implicit_flows:
             self.cases = _match_cases(cfg)
-            dependence = control_dependence(cfg)
+            dependence = graph.control_dependence
             for node_id, controllers in dependence.controllers.items():
                 for branch, label in controllers:
                     if (
@@ -106,14 +105,13 @@ class _Program:
                         and label != "exception"
                     ):
                         self.governed.setdefault(branch, []).append(node_id)
-        reaching = WorklistSolver().solve(cfg, ReachingDefinitionsProblem())
         self.def_use: Dict[Tuple[int, str], List[int]] = {}
-        for chains in DefUseSolver().solve(cfg, reaching).chains.values():
+        for chains in graph.def_use_chains.chains.values():
             for chain in chains:
                 key = (chain.definition, chain.variable_name)
                 self.def_use.setdefault(key, []).extend(chain.uses)
 
-        flows = analyze_interprocedural(cfg)
+        flows = graph.interprocedural_flows
         self.arguments: Dict[Tuple[int, int, int], List[Tuple[int, str]]] = {}
         for flow in flows.argument_flows:
             key = (flow.call.node, flow.call.site, flow.argument)
@@ -577,18 +575,22 @@ def _rules(rules: Rules, language: Optional[str]) -> List[Rule]:
 
 
 def analyze(
-    cfg: CFG,
+    code: Union[CFG, CodeGraph],
     rules: Rules,
     language: Optional[str] = None,
     implicit_flows: bool = False,
     field_sensitive: bool = False,
 ) -> List[Finding]:
     """Findings of the rules on a CFG, ordered by rule, source, sink and argument.
-    `language` filters out rules for other languages. With `implicit_flows`, a
-    branch on a tainted value taints what is defined or returned in the code it
-    decides on. With `field_sensitive`, a write into a field or constant key
-    taints only that field, and reads of other fields stay clean."""
-    program = _Program(cfg, implicit_flows, field_sensitive)
+    Given a `CodeGraph`, the analysis reuses the data flow the graph has already
+    solved, and leaves it there for later queries. `language` filters out rules
+    for other languages. With `implicit_flows`, a branch on a tainted value
+    taints what is defined or returned in the code it decides on. With
+    `field_sensitive`, a write into a field or constant key taints only that
+    field, and reads of other fields stay clean."""
+    graph = code if isinstance(code, CodeGraph) else CodeGraph(code)
+    cfg = graph.cfg
+    program = _Program(graph, implicit_flows, field_sensitive)
     findings: Dict[Tuple[str, int, int, int, int], Finding] = {}
     for rule in _rules(rules, language):
         for origin in _origins(program, rule):

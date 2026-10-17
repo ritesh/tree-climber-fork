@@ -1,6 +1,8 @@
 """Taint propagation: the #44 prototype cases, call-site sanitizers, argument
-positions, sources, flows across calls, C and Java, and finding paths."""
+positions, sources, flows across calls, C and Java, finding paths, and the data
+flow shared with a `CodeGraph`."""
 
+import copy
 import importlib.util
 import json
 from pathlib import Path
@@ -16,6 +18,7 @@ from tree_climber.taint import (
     Source,
     analyze,
     analyze_source,
+    builtin_rules,
 )
 
 
@@ -534,3 +537,73 @@ class TestTheGuide:
         assert flows(code) == [
             't = wrap(input()) -> wrap -> return a -> system(wrap("safe"))'
         ]
+
+
+class TestSharedDataFlow:
+    CODE = (
+        "import os\n"
+        "def run(command):\n"
+        "    if command:\n"
+        "        os.system(command)\n"
+        "host = input()\n"
+        "run(host)\n"
+    )
+
+    @staticmethod
+    def graph():
+        builder = CFGBuilder("python")
+        builder.setup_parser()
+        return CodeGraph(builder.build_cfg(TestSharedDataFlow.CODE))
+
+    @pytest.mark.parametrize("implicit_flows", [False, True])
+    def test_a_graph_gives_the_findings_of_its_cfg(self, implicit_flows):
+        graph = self.graph()
+        rules = builtin_rules("python")
+
+        from_cfg = analyze(graph.cfg, rules, "python", implicit_flows)
+        from_graph = analyze(graph, rules, "python", implicit_flows)
+
+        assert from_graph == from_cfg
+        assert [finding.rule for finding in from_graph] == ["python-command-injection"]
+
+    def test_a_prepared_graph_is_not_solved_again(self, monkeypatch):
+        graph = self.graph()
+        for analysis in (
+            "def_use_chains",
+            "interprocedural_flows",
+            "control_dependence",
+        ):
+            getattr(graph, analysis)
+
+        def solved_again(*args, **kwargs):
+            raise AssertionError("solved again")
+
+        monkeypatch.setattr(
+            "tree_climber.query.graph.WorklistSolver.solve", solved_again
+        )
+        monkeypatch.setattr(
+            "tree_climber.query.graph.analyze_interprocedural", solved_again
+        )
+        monkeypatch.setattr("tree_climber.query.graph.control_dependence", solved_again)
+
+        found = analyze(graph, builtin_rules("python"), "python", implicit_flows=True)
+
+        assert found
+
+    def test_the_analysis_leaves_the_graph_unchanged(self):
+        graph = self.graph()
+        before = copy.deepcopy(
+            (
+                graph.def_use_chains.to_dict(),
+                graph.interprocedural_flows,
+                graph.control_dependence,
+            )
+        )
+
+        analyze(graph, builtin_rules("python"), "python", implicit_flows=True)
+
+        assert (
+            graph.def_use_chains.to_dict(),
+            graph.interprocedural_flows,
+            graph.control_dependence,
+        ) == before

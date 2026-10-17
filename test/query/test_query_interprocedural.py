@@ -271,3 +271,16 @@ def test_the_same_flow_twice_is_one_edge():
     assert [e for e in graph.interprocedural_edges() if e.source == call.id] == [
         DataFlowEdge(call.id, "x", graph.functions()[0].id, "rest", ARGUMENT)
     ]
+
+
+def test_the_edges_are_built_from_the_flows_the_graph_already_has(monkeypatch):
+    graph = CodeGraph.from_source("python", "def f(a):\n    return a\n\n\nx = f(1)\n")
+    flows = graph.interprocedural_flows
+
+    def recomputed(cfg):
+        raise AssertionError("recomputed")
+
+    monkeypatch.setattr("tree_climber.query.edges.analyze_interprocedural", recomputed)
+
+    assert graph.interprocedural_edges() == interprocedural_edges(graph.cfg, flows)
+    assert graph.interprocedural_edges()

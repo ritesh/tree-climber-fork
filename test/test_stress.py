@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from tree_climber import stress
+from tree_climber.dataflow.solver import WorklistSolver
 from tree_climber.stress import (
     STAGES,
     TIMEOUT,
@@ -79,6 +80,22 @@ def test_run_file_runs_every_stage(corpus):
     assert result.lines == 8
     assert result.nodes > 0
     assert signal.getitimer(signal.ITIMER_REAL) == (0.0, 0.0)
+
+
+def test_the_stages_share_one_data_flow(corpus, monkeypatch):
+    solve = WorklistSolver.solve
+    calls = []
+
+    def counted(self, cfg, problem):
+        calls.append(cfg)
+        return solve(self, cfg, problem)
+
+    monkeypatch.setattr(WorklistSolver, "solve", counted)
+
+    result = run_file(task(corpus / "app.py"), list(STAGES), 60)
+
+    assert result.failure is None
+    assert len(calls) == 1
 
 
 def test_run_file_always_builds_the_cfg_first(corpus):
