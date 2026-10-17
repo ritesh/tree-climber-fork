@@ -1,10 +1,11 @@
 """
 Tests for the FastAPI endpoints in tree_climber.viz.app.
 
-The endpoint coroutines are called directly, so no running server is needed.
+The endpoints are called directly, so no running server is needed.
 """
 
 import asyncio
+import inspect
 
 import pytest
 from pydantic import ValidationError
@@ -56,7 +57,7 @@ def test_health_endpoint():
 def test_parse_endpoint(language, source):
     request = ParseRequest.model_validate({"source_code": source, "language": language})
 
-    response = asyncio.run(parse_source_code(request))
+    response = parse_source_code(request)
 
     assert response.success, response.error
     assert response.cfg is not None
@@ -72,7 +73,7 @@ def test_parse_endpoint_python():
     source = "def foo():\n    x = 42\n    return x\n"
     request = ParseRequest.model_validate({"source_code": source, "language": "python"})
 
-    response = asyncio.run(parse_source_code(request))
+    response = parse_source_code(request)
 
     assert response.success, response.error
     assert response.cfg is not None
@@ -110,12 +111,12 @@ def run(command):
 
 def taint(**body):
     request = TaintRequest.model_validate({"language": "python", **body})
-    return asyncio.run(taint_source_code(request))
+    return taint_source_code(request)
 
 
 def query(**body):
     request = QueryRequest.model_validate({"language": "python", **body})
-    return asyncio.run(query_source_code(request))
+    return query_source_code(request)
 
 
 def test_root_lists_the_new_endpoints():
@@ -138,10 +139,8 @@ def test_taint_with_the_builtin_rules():
 
 
 def test_taint_node_ids_are_those_of_parse():
-    parsed = asyncio.run(
-        parse_source_code(
-            ParseRequest.model_validate({"source_code": TAINTED, "language": "python"})
-        )
+    parsed = parse_source_code(
+        ParseRequest.model_validate({"source_code": TAINTED, "language": "python"})
     )
     assert parsed.cfg is not None
 
@@ -269,3 +268,39 @@ def test_query_errors(body, message):
 def test_query_request_is_validated(body):
     with pytest.raises(ValidationError):
         QueryRequest.model_validate({"source_code": TAINTED, **body})
+
+
+@pytest.mark.parametrize(
+    "endpoint", [parse_source_code, taint_source_code, query_source_code]
+)
+def test_analysis_endpoints_run_in_the_thread_pool(endpoint):
+    assert not inspect.iscoroutinefunction(endpoint)
+
+
+def test_parse_without_the_ast_skips_building_it(monkeypatch):
+    monkeypatch.setattr(
+        "tree_climber.viz.app.ast_to_json",
+        lambda node: pytest.fail("the AST was built"),
+    )
+    request = ParseRequest.model_validate(
+        {"source_code": C_SOURCE, "language": "c", "include_ast": False}
+    )
+
+    response = parse_source_code(request)
+
+    assert response.success, response.error
+    assert response.ast is None
+    assert response.cfg is not None and response.cfg["nodes"]
+    assert response.dfg is not None and response.dfg["edges"]
+
+
+def test_parse_includes_the_ast_by_default():
+    request = ParseRequest.model_validate({"source_code": C_SOURCE, "language": "c"})
+
+    assert request.include_ast
+    assert parse_source_code(request).ast is not None
+
+
+def test_only_parse_takes_include_ast():
+    assert "include_ast" not in TaintRequest.model_fields
+    assert "include_ast" not in QueryRequest.model_fields

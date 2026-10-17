@@ -136,7 +136,7 @@ bun dev
 
 The FastAPI backend provides the following endpoints:
 
-- `POST /parse` - Parse source code (`{"source_code": ..., "language": "c" | "java" | "python"}`) and return the CFG, AST, and def-use edges as JSON
+- `POST /parse` - Parse source code (`{"source_code": ..., "language": "c" | "java" | "python"}`) and return the CFG, AST, and def-use edges as JSON (`"include_ast": false` leaves out the AST)
 - `POST /taint` - Taint findings for source code, with their paths (built-in example rules, or `rules` in the request)
 - `POST /query` - The nodes calling a function, or a slice from a line
 - `GET /` - API version and supported languages

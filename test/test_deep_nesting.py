@@ -11,7 +11,6 @@ The helpers that replaced recursive walks are also compared with recursive refer
 versions on ordinary code, so their output did not change.
 """
 
-import asyncio
 import sys
 from typing import Any, Dict, List
 
@@ -90,9 +89,7 @@ def test_cfg_and_dataflow(language, source):
 
 @CASES
 def test_parse_endpoint(language, source):
-    response = asyncio.run(
-        parse_source_code(ParseRequest(source_code=source, language=language))
-    )
+    response = parse_source_code(ParseRequest(source_code=source, language=language))
 
     assert response.success, response.error
     assert response.ast is not None

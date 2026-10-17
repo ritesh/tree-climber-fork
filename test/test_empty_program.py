@@ -6,7 +6,6 @@ C and Java build an empty CFG for these instead of raising. Python keeps an
 empty `<module>` ENTRY/EXIT pair, since a module always has top-level flow.
 """
 
-import asyncio
 import subprocess
 import sys
 
@@ -68,7 +67,7 @@ def test_the_dataflow_solvers_accept_an_empty_cfg(language, code):
 def test_the_api_returns_an_empty_graph_instead_of_an_error(language, code):
     request = ParseRequest.model_validate({"source_code": code, "language": language})
 
-    response = asyncio.run(parse_source_code(request))
+    response = parse_source_code(request)
 
     assert response.success, response.error
     assert response.cfg is not None

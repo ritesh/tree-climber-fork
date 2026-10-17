@@ -37,6 +37,7 @@ const API_BASE_URL = 'http://localhost:8000';
 const DEF_USE_EDGES_KEY = 'tree_climber_show_def_use_edges';
 const PATH_COLOR = '#E65100';
 const LAYOUT_EXCLUDED_EDGES = ['DATA_DEPENDENCY', 'TAINT_STEP'];
+const ANALYSIS_DELAY_MS = 300;
 
 interface GraphRef {
   updateGraph: (code: string, language: string) => Promise<void>;
@@ -231,7 +232,7 @@ const convertDFGToElements = (dfgData: DFGData) => {
 }
 
 // API call to parse code and get CFG
-const parseCode = async (code: string, language: string): Promise<GraphData> => {
+const parseCode = async (code: string, language: string, signal: AbortSignal): Promise<GraphData> => {
   const response = await fetch(`${API_BASE_URL}/parse`, {
     method: 'POST',
     headers: {
@@ -240,7 +241,9 @@ const parseCode = async (code: string, language: string): Promise<GraphData> => 
     body: JSON.stringify({
       source_code: code,
       language: language,
+      include_ast: false,
     }),
+    signal,
   });
 
   if (!response.ok) {
@@ -253,13 +256,12 @@ const parseCode = async (code: string, language: string): Promise<GraphData> => 
   }
 
   return {
-    ast: result.ast,
     cfg: result.cfg,
     dfg: result.dfg,
   };
 };
 
-const fetchFindings = async (code: string, language: string): Promise<Finding[]> => {
+const fetchFindings = async (code: string, language: string, signal: AbortSignal): Promise<Finding[]> => {
   const response = await fetch(`${API_BASE_URL}/taint`, {
     method: 'POST',
     headers: {
@@ -269,6 +271,7 @@ const fetchFindings = async (code: string, language: string): Promise<Finding[]>
       source_code: code,
       language: language,
     }),
+    signal,
   });
 
   if (!response.ok) {
@@ -301,10 +304,22 @@ const Graph = forwardRef<GraphRef>((_props, ref) => {
   // Store last loaded graphs for toggling DFG edges
   const lastGraphs = useRef<GraphData | null>(null);
   const latestRequest = useRef(0);
+  const pendingAnalysis = useRef<number | undefined>(undefined);
+  const inFlight = useRef<AbortController | null>(null);
 
-  // Update graph with new code
-  const updateGraph = async (code: string, language: string = 'c') => {
+  // Analyze the code once edits pause, cancelling the requests of older edits
+  const updateGraph = (code: string, language: string = 'c') => {
     const request = ++latestRequest.current;
+    window.clearTimeout(pendingAnalysis.current);
+    inFlight.current?.abort();
+    return new Promise<void>((resolve) => {
+      pendingAnalysis.current = window.setTimeout(() => {
+        analyzeCode(request, code, language).finally(resolve);
+      }, ANALYSIS_DELAY_MS);
+    });
+  };
+
+  const analyzeCode = async (request: number, code: string, language: string) => {
     setHighlightedPath(null);
     if (!code.trim()) {
       setElements([]);
@@ -313,10 +328,12 @@ const Graph = forwardRef<GraphRef>((_props, ref) => {
       return;
     }
 
-    const findings = fetchFindings(code, language);
+    const controller = new AbortController();
+    inFlight.current = controller;
+    const findings = fetchFindings(code, language, controller.signal);
     findings.catch(() => undefined);
     try {
-      const graphs = await parseCode(code, language);
+      const graphs = await parseCode(code, language, controller.signal);
       if (request !== latestRequest.current) {
         return;
       }
