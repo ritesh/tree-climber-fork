@@ -81,6 +81,26 @@ def test_run_file_runs_every_stage(corpus):
     assert signal.getitimer(signal.ITIMER_REAL) == (0.0, 0.0)
 
 
+def test_stages_share_one_data_flow(corpus, monkeypatch):
+    from tree_climber.query import graph
+
+    calls = []
+    names = ["ReachingDefinitionsProblem", "analyze_interprocedural"]
+    for name in [*names, "control_dependence"]:
+        original = getattr(graph, name)
+
+        def counted(*args, original=original, name=name):
+            calls.append(name)
+            return original(*args)
+
+        monkeypatch.setattr(graph, name, counted)
+
+    result = run_file(task(corpus / "app.py"), list(STAGES), 60)
+
+    assert result.failure is None
+    assert sorted(calls) == sorted([*names, "control_dependence"])
+
+
 def test_run_file_always_builds_the_cfg_first(corpus):
     result = run_file(task(corpus / "app.py"), ["taint"], 60)
     assert list(result.seconds) == ["cfg", "taint"]

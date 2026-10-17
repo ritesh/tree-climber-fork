@@ -6,12 +6,17 @@ The endpoints are called directly, so no running server is needed.
 
 import asyncio
 import inspect
+import threading
+import time
 
 import pytest
 from pydantic import ValidationError
 
 from tree_climber.language_registry import DEFAULT_LANGUAGE, SUPPORTED_LANGUAGES
+from tree_climber.query import graph as graph_module
+from tree_climber.viz import app
 from tree_climber.viz.app import (
+    CACHED_ANALYSES,
     ParseRequest,
     QueryRequest,
     TaintRequest,
@@ -304,3 +309,94 @@ def test_parse_includes_the_ast_by_default():
 def test_only_parse_takes_include_ast():
     assert "include_ast" not in TaintRequest.model_fields
     assert "include_ast" not in QueryRequest.model_fields
+
+
+@pytest.fixture
+def solves(monkeypatch):
+    """The reaching-definitions solves, each slowed down so that concurrent
+    requests overlap."""
+    app._analyses.clear()
+    calls = []
+    original = graph_module.ReachingDefinitionsProblem
+
+    def counted():
+        calls.append(1)
+        time.sleep(0.2)
+        return original()
+
+    monkeypatch.setattr(graph_module, "ReachingDefinitionsProblem", counted)
+    yield calls
+    app._analyses.clear()
+
+
+def test_one_edit_is_analysed_once(solves):
+    body = {"source_code": TAINTED, "language": "python"}
+
+    parsed = parse_source_code(ParseRequest.model_validate(body))
+    tainted = taint_source_code(TaintRequest.model_validate(body))
+    queried = query_source_code(
+        QueryRequest.model_validate({**body, "kind": "calls", "names": ["input"]})
+    )
+
+    assert parsed.success and tainted.success and queried.success
+    assert tainted.findings and queried.nodes
+    assert len(solves) == 1
+
+
+def test_concurrent_requests_wait_for_one_analysis(solves):
+    body = {"source_code": TAINTED, "language": "python"}
+    responses = []
+    requests = [
+        lambda: parse_source_code(ParseRequest.model_validate(body)),
+        lambda: taint_source_code(TaintRequest.model_validate(body)),
+    ]
+    threads = [
+        threading.Thread(target=lambda r=request: responses.append(r()))
+        for request in requests
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert all(response.success for response in responses)
+    assert len(solves) == 1
+
+
+def test_other_sources_and_languages_are_analysed_afresh(solves):
+    for language, source in [
+        ("python", TAINTED),
+        ("python", TAINTED + "\n"),
+        ("c", C_SOURCE),
+        ("java", C_SOURCE),
+    ]:
+        request = ParseRequest.model_validate(
+            {"source_code": source, "language": language}
+        )
+        assert parse_source_code(request).success
+
+    assert len(solves) == 4
+
+
+def test_only_the_last_sources_are_kept(solves):
+    sources = [f"x = {n}\n" for n in range(CACHED_ANALYSES + 1)]
+    for source in sources:
+        parse_source_code(ParseRequest.model_validate({"source_code": source}))
+    parse_source_code(ParseRequest.model_validate({"source_code": sources[-1]}))
+    assert len(solves) == CACHED_ANALYSES + 1
+
+    parse_source_code(ParseRequest.model_validate({"source_code": sources[0]}))
+    assert len(solves) == CACHED_ANALYSES + 2
+    assert len(app._analyses) == CACHED_ANALYSES
+
+
+def test_a_failed_analysis_is_not_kept(solves, monkeypatch):
+    def broken(*args, **kwargs):
+        raise RuntimeError("no CFG")
+
+    request = ParseRequest.model_validate({"source_code": C_SOURCE, "language": "c"})
+    with monkeypatch.context() as patch:
+        patch.setattr("tree_climber.viz.app.CFGBuilder.build_cfg", broken)
+        assert parse_source_code(request).error == "no CFG"
+
+    assert parse_source_code(request).success

@@ -6,19 +6,17 @@ and return their Control Flow Graph (CFG) representation in JSON format.
 
 import logging
 import os
-from typing import Any, Dict, List, Literal, Optional
+import threading
+from collections import OrderedDict
+from typing import Any, Dict, List, Literal, Optional, Tuple
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, field_validator
+from tree_sitter import Tree
 
 from tree_climber.ast_utils import ast_to_json
 from tree_climber.cfg.builder import CFGBuilder
-from tree_climber.dataflow.analyses.def_use import DefUseSolver
-from tree_climber.dataflow.analyses.reaching_definitions import (
-    ReachingDefinitionsProblem,
-)
-from tree_climber.dataflow.solver import WorklistSolver
 from tree_climber.language_registry import (
     DEFAULT_LANGUAGE,
     SUPPORTED_LANGUAGES,
@@ -165,6 +163,61 @@ class QueryResponse(BaseModel):
     )
 
 
+CACHED_ANALYSES = 4
+
+
+class Analysis:
+    """The parse tree and `CodeGraph` of one source, built once and shared by
+    the endpoints. Consumers must not modify them."""
+
+    def __init__(self) -> None:
+        self.lock = threading.Lock()
+        self.tree: Optional[Tree] = None
+        self.graph: Optional[CodeGraph] = None
+
+
+_analyses: "OrderedDict[Tuple[str, str], Analysis]" = OrderedDict()
+_analyses_lock = threading.Lock()
+
+
+def analysis(language: str, source: str) -> Analysis:
+    """The analysis of the source, built on first use. The editor sends `/parse`
+    and `/taint` for each edit at once: the second waits for the first's build
+    instead of making its own. Only the last `CACHED_ANALYSES` are kept."""
+    key = (language, source)
+    with _analyses_lock:
+        entry = _analyses.get(key)
+        if entry is None:
+            entry = _analyses[key] = Analysis()
+        _analyses.move_to_end(key)
+        while len(_analyses) > CACHED_ANALYSES:
+            _analyses.popitem(last=False)
+    with entry.lock:
+        if entry.graph is None:
+            builder = CFGBuilder(language)
+            builder.setup_parser()
+            if not builder.parser:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Parser for {language} not set up correctly.",
+                )
+            tree = builder.parser.parse(bytes(source, "utf8"))
+            if not tree:
+                raise HTTPException(
+                    status_code=400, detail="Failed to parse source code."
+                )
+            graph = CodeGraph(builder.build_cfg(tree=tree))
+            _ = graph.def_use_chains
+            entry.tree, entry.graph = tree, graph
+    return entry
+
+
+def _graph(language: str, source: str) -> CodeGraph:
+    graph = analysis(language, source).graph
+    assert graph is not None
+    return graph
+
+
 @app.get("/")
 async def root():
     """Root endpoint providing API information"""
@@ -203,46 +256,21 @@ def parse_source_code(request: ParseRequest) -> ParseResponse:
             f"Parsing {len(request.source_code)} bytes of {request.language} code"
         )
 
-        # Create and setup CFG builder
-        builder = CFGBuilder(request.language)
-        builder.setup_parser()
-        if not builder.parser:
-            raise HTTPException(
-                status_code=500,
-                detail=f"Parser for {request.language} not set up correctly.",
-            )
-
-        # Parse source code to get AST
-        tree = builder.parser.parse(bytes(request.source_code, "utf8"))
-        if not tree:
-            raise HTTPException(status_code=400, detail="Failed to parse source code.")
-
-        # Convert AST to dictionary for JSON serialization
-        ast_dict = ast_to_json(tree.root_node) if request.include_ast else None
-
-        # Build CFG from AST
-        cfg = builder.build_cfg(tree=tree)
+        entry = analysis(request.language, request.source_code)
+        assert entry.tree is not None and entry.graph is not None
+        ast_dict = ast_to_json(entry.tree.root_node) if request.include_ast else None
+        cfg = entry.graph.cfg
 
         logger.info(
             f"CFG built successfully: function={cfg.function_name}, "
             f"nodes={len(cfg.nodes)}"
         )
 
-        # Analyze reaching definitions
-        problem = ReachingDefinitionsProblem()
-
-        solver = WorklistSolver()
-        result = solver.solve(cfg, problem)
-
-        # Analyze def-use chains
-        def_use_analyzer = DefUseSolver()
-        def_use_result = def_use_analyzer.solve(cfg, result)
-
-        # Convert CFG to JSON-serializable dictionary
-        cfg_dict = cfg.to_dict()
-
         return ParseResponse(
-            success=True, cfg=cfg_dict, ast=ast_dict, dfg=def_use_result.to_dict()
+            success=True,
+            cfg=cfg.to_dict(),
+            ast=ast_dict,
+            dfg=entry.graph.def_use_chains.to_dict(),
         )
 
     except Exception as e:
@@ -259,8 +287,8 @@ def taint_source_code(request: TaintRequest) -> TaintResponse:
             rules = load_rules(BUILTIN_RULES, request.language)
         else:
             rules = rules_from_dict(request.rules, request.language)
-        graph = CodeGraph.from_source(request.language, request.source_code)
-        findings = analyze(graph.cfg, rules, request.language)
+        graph = _graph(request.language, request.source_code)
+        findings = analyze(graph, rules, request.language)
         return TaintResponse(
             success=True, findings=[finding.to_dict() for finding in findings]
         )
@@ -273,7 +301,7 @@ def taint_source_code(request: TaintRequest) -> TaintResponse:
 def query_source_code(request: QueryRequest) -> QueryResponse:
     """Answer a query on source code. Node ids are those `/parse` returns."""
     try:
-        graph = CodeGraph.from_source(request.language, request.source_code)
+        graph = _graph(request.language, request.source_code)
         if request.kind == "calls":
             if not request.names:
                 raise ValueError("A calls query needs names")

@@ -33,6 +33,18 @@ def flow(graph, source, target, edges=None):
     return None if path is None else [(step.edge, step.variable) for step in path.steps]
 
 
+def test_the_edges_reuse_the_cached_flows(monkeypatch):
+    graph = CodeGraph.from_source("python", ACROSS_A_CALL["python"])
+    flows = graph.interprocedural_flows
+    monkeypatch.setattr(
+        "tree_climber.query.edges.analyze_interprocedural",
+        lambda cfg: pytest.fail("the flows were computed again"),
+    )
+
+    assert graph.interprocedural_edges() == interprocedural_edges(graph.cfg, flows)
+    assert graph.interprocedural_edges()
+
+
 @LANGUAGES
 def test_an_argument_flows_into_the_callee(language):
     graph = CodeGraph.from_source(language, ACROSS_A_CALL[language])
