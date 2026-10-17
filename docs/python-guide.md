@@ -1135,7 +1135,7 @@ curl -s localhost:8000/parse -H 'content-type: application/json' \
   -d '{"language": "python", "source_code": "x = 1\nprint(x)\n"}'
 ```
 
-The response has `success`, `cfg` (`function_name`, `entry_node_ids`, `exit_node_ids`, `nodes`), `ast`, and `dfg` (`edges` from definition to use, labeled with the variable). An unsupported language such as `"cobol"` is rejected with a validation error. `POST /taint` and `POST /query` are described in [Tracing user input](#tracing-user-input). `GET /` lists the supported languages and `GET /health` returns `{"status": "healthy"}`.
+The response has `success`, `cfg` (`function_name`, `entry_node_ids`, `exit_node_ids`, `nodes`), `ast`, and `dfg` (`edges` from definition to use, labeled with the variable). The AST is most of the response on large files; `"include_ast": false` leaves it out. An unsupported language such as `"cobol"` is rejected with a validation error. `POST /taint` and `POST /query` are described in [Tracing user input](#tracing-user-input). `GET /` lists the supported languages and `GET /health` returns `{"status": "healthy"}`.
 
 ## 5. Run the Python tests
 

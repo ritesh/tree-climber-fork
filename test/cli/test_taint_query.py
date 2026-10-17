@@ -4,7 +4,6 @@ in the "Tracing user input" section of docs/python-guide.md, and for the path
 highlight drawn on the CFG and DFG images.
 """
 
-import asyncio
 import json
 import re
 import subprocess
@@ -641,9 +640,7 @@ class TestGuide:
         assert request is not None
         body = json.loads(request.group(1).replace("\n", "\\n"))
 
-        response = asyncio.run(
-            taint_source_code(TaintRequest.model_validate(body))
-        ).model_dump()
+        response = taint_source_code(TaintRequest.model_validate(body)).model_dump()
 
         assert [json.loads(block) for block in self.blocks(section, "json")] == [
             response

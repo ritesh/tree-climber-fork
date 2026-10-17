@@ -21,22 +21,8 @@ interface CFGNode {
 }
 
 export interface GraphData {
-  ast: ASTData;
   cfg: CFGData;
   dfg: DFGData;
-}
-
-interface ASTNode {
-  id: number;
-  type: string;
-  start: number | null;
-  end: number | null;
-  source_text: string;
-  children: ASTNode[];
-}
-
-interface ASTData {
-  root_node: ASTNode;
 }
 
 interface CFGData {

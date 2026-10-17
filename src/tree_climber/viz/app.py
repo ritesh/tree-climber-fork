@@ -65,8 +65,8 @@ app.add_middleware(
 )
 
 
-class ParseRequest(BaseModel):
-    """Request model for parsing source code"""
+class SourceRequest(BaseModel):
+    """Source code and its language, as every analysis endpoint takes them"""
 
     source_code: str = Field(..., description="The source code to parse")
     language: str = Field(
@@ -80,6 +80,15 @@ class ParseRequest(BaseModel):
     def language_must_be_supported(cls, value: str) -> str:
         get_language(value)
         return value
+
+
+class ParseRequest(SourceRequest):
+    """Request model for parsing source code"""
+
+    include_ast: bool = Field(
+        default=True,
+        description="Include the AST; it is most of the response on large files",
+    )
 
 
 class ParseResponse(BaseModel):
@@ -101,7 +110,7 @@ class ParseResponse(BaseModel):
     )
 
 
-class TaintRequest(ParseRequest):
+class TaintRequest(SourceRequest):
     """Request model for taint analysis"""
 
     rules: Optional[Dict[str, Any]] = Field(
@@ -125,7 +134,7 @@ class TaintResponse(BaseModel):
     )
 
 
-class QueryRequest(ParseRequest):
+class QueryRequest(SourceRequest):
     """Request model for a graph query"""
 
     kind: Literal["calls", "slice"] = Field(
@@ -179,11 +188,12 @@ async def health_check():
 
 
 @app.post("/parse", response_model=ParseResponse)
-async def parse_source_code(request: ParseRequest) -> ParseResponse:
+def parse_source_code(request: ParseRequest) -> ParseResponse:
     """Parse source code and return a CFG and AST in JSON format.
 
     Args:
-        request: ParseRequest containing source code and language
+        request: ParseRequest containing source code, language and whether to
+            include the AST
 
     Returns:
         ParseResponse containing the CFG and AST in JSON format or error message
@@ -208,7 +218,7 @@ async def parse_source_code(request: ParseRequest) -> ParseResponse:
             raise HTTPException(status_code=400, detail="Failed to parse source code.")
 
         # Convert AST to dictionary for JSON serialization
-        ast_dict = ast_to_json(tree.root_node)
+        ast_dict = ast_to_json(tree.root_node) if request.include_ast else None
 
         # Build CFG from AST
         cfg = builder.build_cfg(tree=tree)
@@ -241,7 +251,7 @@ async def parse_source_code(request: ParseRequest) -> ParseResponse:
 
 
 @app.post("/taint", response_model=TaintResponse)
-async def taint_source_code(request: TaintRequest) -> TaintResponse:
+def taint_source_code(request: TaintRequest) -> TaintResponse:
     """Run taint rules (the built-in example rules by default) on source code.
     Node ids are those `/parse` returns for the same code."""
     try:
@@ -260,7 +270,7 @@ async def taint_source_code(request: TaintRequest) -> TaintResponse:
 
 
 @app.post("/query", response_model=QueryResponse)
-async def query_source_code(request: QueryRequest) -> QueryResponse:
+def query_source_code(request: QueryRequest) -> QueryResponse:
     """Answer a query on source code. Node ids are those `/parse` returns."""
     try:
         graph = CodeGraph.from_source(request.language, request.source_code)
