@@ -13,6 +13,7 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
+import click
 import typer
 import typer.main
 from typer.core import TyperCommand
@@ -27,6 +28,7 @@ from tree_climber.cli.commands import (
     run_taint,
 )
 from tree_climber.cli.options import QueryOptions, TaintOptions
+from tree_climber.cli.visualizers.constants import IMAGE_FORMATS
 from tree_climber.cli.source import (
     ClipboardSource,
     CodeSource,
@@ -62,6 +64,15 @@ def list_languages_callback(value: bool) -> None:
 
 
 SUBCOMMANDS: Dict[str, typer.Typer] = {}
+
+FormatOption = Annotated[
+    str,
+    typer.Option(
+        "--format",
+        click_type=click.Choice(IMAGE_FORMATS),
+        help="Image format of the saved drawings",
+    ),
+]
 
 
 class DrawCommand(TyperCommand):
@@ -205,6 +216,7 @@ def typer_main(
             help=f"Layout style for visualizations ({', '.join(SUPPORTED_LAYOUTS)}).",
         ),
     ] = "subtree",
+    image_format: FormatOption = "png",
 ):
     """
     Analyze source code and generate program analysis visualizations.
@@ -389,6 +401,7 @@ def typer_main(
         verbose=verbose,
         quiet=quiet,
         timing=timing,
+        image_format=image_format,
     )
 
     # Perform analysis
@@ -502,6 +515,7 @@ def taint(
         bool,
         typer.Option("--show", help="Open the saved images in the image viewer"),
     ] = False,
+    image_format: FormatOption = "png",
 ):
     """
     Trace untrusted input to dangerous calls and print each finding with its path.
@@ -527,6 +541,7 @@ def taint(
         draw_dfg=draw_dfg,
         output_dir=output_dir or code_source.get_output_dir(),
         show=show,
+        image_format=image_format,
     )
     try:
         run_taint(code_source, options)

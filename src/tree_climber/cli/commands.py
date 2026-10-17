@@ -39,7 +39,7 @@ from .visualizers import (
     DFGVisualizer,
     SubtreeVisualizer,
 )
-from .visualizers.utils import highlight_path
+from .visualizers.utils import draw_graph, highlight_path
 
 SUPPORTED_LAYOUTS = {"bigraph": BiGraphVisualizer, "subtree": SubtreeVisualizer}
 
@@ -179,7 +179,8 @@ def _finding_image(
     source: CodeSource, options: TaintOptions, number: int, kind: str
 ) -> Path:
     options.output_dir.mkdir(parents=True, exist_ok=True)
-    return options.output_dir / f"{source.get_output_name()}_finding{number}_{kind}.png"
+    name = f"{source.get_output_name()}_finding{number}_{kind}.{options.image_format}"
+    return options.output_dir / name
 
 
 def _draw_finding(
@@ -214,7 +215,7 @@ def _draw_finding(
         graph = visualizer.graph()
         highlight_path(graph, cfg, finding.path)
         path = _finding_image(source, options, number, kind)
-        graph.draw(str(path), prog="dot")
+        draw_graph(graph, path)
         typer.echo(f"Saved finding {number} on the {kind.upper()}: {path}", err=True)
         saved.append(path)
     return saved

@@ -310,6 +310,16 @@ class TestTaint:
         ]
         assert "Saved finding 2 on the DFG" in result.output
 
+    def test_draw_in_another_format(self, in_tmp):
+        result = invoke(
+            "taint", "app.py", "--finding", "1", "--draw-cfg", "--format", "svg"
+        )
+
+        assert result.exit_code == 0, result.output
+        drawn = in_tmp / "app.py_finding1_cfg.svg"
+        assert drawn.read_text().startswith("<?xml")
+        assert not list(in_tmp.glob("*.png"))
+
     def test_draw_one_finding_next_to_the_file(self, in_tmp):
         result = invoke("taint", "app.py", "--finding", "2", "--draw-dfg")
 

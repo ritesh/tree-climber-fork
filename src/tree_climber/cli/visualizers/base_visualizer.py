@@ -99,7 +99,10 @@ class BaseVisualizer(abc.ABC):
 
     def output_path(self, name: Literal["ast", "cfg", "dfg", "cpg"]) -> Path:
         output_dir = self.output_dir
-        output_ast_path = output_dir / f"{self.source.get_output_name()}_{name}.png"
+        output_ast_path = (
+            output_dir
+            / f"{self.source.get_output_name()}_{name}.{self.options.image_format}"
+        )
         return output_ast_path
 
     @abc.abstractmethod

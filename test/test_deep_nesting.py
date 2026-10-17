@@ -4,8 +4,9 @@ Deeply nested expressions must not hit Python's recursion limit (issue #55).
 tree-sitter nests `a = b = c` and `x + y + z` one level per operator, so generated
 code can be thousands of levels deep. Every program here is deeper than the
 recursion limit and goes through the CFG builder and dataflow, `/parse`, and each CLI
-drawing. The CLI tests stub out Graphviz's layout (`AGraph.draw`), which is slow on a
-graph this deep and is not our code; they check that the graph is built.
+drawing. The CLI tests stub out Graphviz's layout and rendering (`AGraph.layout` and
+`AGraph.draw`), which are slow on a graph this deep and are not our code; they check
+that the graph is built.
 
 The helpers that replaced recursive walks are also compared with recursive reference
 versions on ordinary code, so their output did not change.
@@ -113,6 +114,11 @@ def test_parse_endpoint(language, source):
 )
 def test_cli_drawings(language, source, flags, tmp_path, monkeypatch):
     drawn: List[pgv.AGraph] = []
+    monkeypatch.setattr(
+        pgv.AGraph,
+        "layout",
+        lambda graph, *a, **k: graph.graph_attr.update(bb="0,0,1,1"),
+    )
     monkeypatch.setattr(pgv.AGraph, "draw", lambda graph, *a, **k: drawn.append(graph))
     path = tmp_path / f"program.{EXTENSIONS[language]}"
     path.write_text(source)

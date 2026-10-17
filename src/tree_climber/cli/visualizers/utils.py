@@ -1,3 +1,6 @@
+import math
+from pathlib import Path as FilePath
+
 import pygraphviz as pgv
 from tree_sitter import Node
 
@@ -10,7 +13,13 @@ from tree_climber.cli.visualizers.base_visualizer import (
 )
 from tree_climber.query import FLOW, Path
 
-from .constants import PATH_EDGE_COLOR, PATH_NODE_COLOR
+from .constants import (
+    DEFAULT_DPI,
+    MAX_PNG_PIXELS,
+    NETWORK_SIMPLEX_LIMIT,
+    PATH_EDGE_COLOR,
+    PATH_NODE_COLOR,
+)
 
 
 def add_dfg_edge(G: pgv.AGraph, pred: int, succ: int, dfg_label: str):
@@ -55,3 +64,19 @@ def highlight_path(G: pgv.AGraph, cfg: CFG, path: Path):
             penwidth="3",
             label=f"{number}: {label}",
         )
+
+
+def png_dpi(G: pgv.AGraph) -> int:
+    left, bottom, right, top = map(float, G.graph_attr["bb"].split(","))
+    square_points = (right - left) * (top - bottom)
+    if square_points * DEFAULT_DPI**2 <= MAX_PNG_PIXELS * 72**2:
+        return DEFAULT_DPI
+    return math.floor(72 * math.sqrt(MAX_PNG_PIXELS / square_points))
+
+
+def draw_graph(G: pgv.AGraph, path: FilePath) -> None:
+    G.graph_attr["nslimit"] = NETWORK_SIMPLEX_LIMIT
+    G.layout(prog="dot")
+    if path.suffix == ".png":
+        G.graph_attr["dpi"] = str(png_dpi(G))
+    G.draw(str(path))

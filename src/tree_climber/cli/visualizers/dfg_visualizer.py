@@ -7,11 +7,7 @@ from tree_climber.cli.visualizers.base_visualizer import (
     BaseVisualizer,
     get_node_display,
 )
-from tree_climber.cli.visualizers.utils import add_cfg_node, add_dfg_edge
-
-from .constants import (
-    DEFAULT_DPI,
-)
+from tree_climber.cli.visualizers.utils import add_cfg_node, add_dfg_edge, draw_graph
 
 
 class DFGVisualizer(BaseVisualizer):
@@ -20,7 +16,7 @@ class DFGVisualizer(BaseVisualizer):
         if not self.options.draw_dfg:
             return
 
-        self.graph().draw(str(self.output_path("dfg")), prog="dot")
+        draw_graph(self.graph(), self.output_path("dfg"))
         print(f"Saved DFG visualization: {self.output_path('dfg')}")
 
     def graph(self) -> pgv.AGraph:
@@ -36,7 +32,6 @@ class DFGVisualizer(BaseVisualizer):
         G_dfg.graph_attr.update(
             ranksep="0.2",
             nodesep="0.45",
-            dpi=str(DEFAULT_DPI),
             rankdir="TB",
             splines=True,
             margin="0.05",

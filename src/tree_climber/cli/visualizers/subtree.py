@@ -9,6 +9,7 @@ from tree_climber.cli.visualizers.base_visualizer import (
     get_node_label,
     truncate_ast_label,
 )
+from tree_climber.cli.visualizers.utils import draw_graph
 
 from .constants import (
     AST_OVERLAY_BORDER_COLOR,
@@ -17,7 +18,6 @@ from .constants import (
     AST_OVERLAY_LINKING_EDGE_COLOR,
     AST_OVERLAY_NODE_COLOR,
     AST_OVERLAY_SHOW_ONLY_NAMED,
-    DEFAULT_DPI,
 )
 
 
@@ -36,7 +36,6 @@ class SubtreeVisualizer(BaseVisualizer):
         G.graph_attr.update(
             ranksep="0.2",
             nodesep="0.45",
-            dpi=str(DEFAULT_DPI),
             rankdir="TB",
             compound="true",
             splines=True,
@@ -148,5 +147,5 @@ class SubtreeVisualizer(BaseVisualizer):
                     constraint="true",
                 )
 
-        G.draw(str(self.output_path("cpg")), prog="dot")
+        draw_graph(G, self.output_path("cpg"))
         print(f"Saved CPG visualization: {self.output_path('cpg')}")
