@@ -7,6 +7,9 @@ Following the DRY principle, all constants used throughout the CLI are defined h
 # Visualization constants
 DEFAULT_FIGURE_SIZE: tuple[int, int] = (12, 8)
 DEFAULT_DPI: int = 300
+MAX_PNG_PIXELS: int = 25_000_000
+NETWORK_SIMPLEX_LIMIT: str = "1"
+IMAGE_FORMATS: tuple[str, ...] = ("png", "svg", "pdf")
 MAX_LABEL_LENGTH: int = 50
 TRUNCATION_SUFFIX: str = "..."
 

@@ -1,6 +1,6 @@
 """
 Tests for the tree-climber command line: option spellings, --version and
---list-languages, and error messages.
+--list-languages, error messages, and the image format and resolution.
 
 Most tests drive the Typer app in-process; two run `python -m tree_climber.cli`
 to cover the real entry point.
@@ -10,6 +10,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pygraphviz as pgv
 import pytest
 import typer
 import typer.main
@@ -17,6 +18,12 @@ from typer.testing import CliRunner
 
 from tree_climber import __version__
 from tree_climber.cli.__main__ import app
+from tree_climber.cli.visualizers.constants import (
+    DEFAULT_DPI,
+    MAX_PNG_PIXELS,
+    NETWORK_SIMPLEX_LIMIT,
+)
+from tree_climber.cli.visualizers.utils import draw_graph, png_dpi
 from tree_climber.language_registry import SUPPORTED_LANGUAGES
 
 runner = CliRunner()
@@ -217,3 +224,87 @@ def test_a_viewer_that_fails_to_launch_only_warns(c_file, tmp_path, monkeypatch)
     assert result.exit_code == 0, result.output
     assert "could not open" in result.output
     assert (tmp_path / "prog.c_cfg.png").exists()
+
+
+MAGIC = {"png": b"\x89PNG", "svg": b"<?xml", "pdf": b"%PDF"}
+
+
+@pytest.mark.parametrize("image_format", ["svg", "pdf"])
+def test_format_sets_the_image_type_and_extension(c_file, tmp_path, image_format):
+    result = runner.invoke(
+        app,
+        [str(c_file), "--draw-ast", "--draw-cfg", "--draw-dfg", "--draw-cpg"]
+        + ["--format", image_format, "-o", str(tmp_path)],
+    )
+
+    assert result.exit_code == 0, result.output
+    for kind in ("ast", "cfg", "dfg", "cpg"):
+        path = tmp_path / f"prog.c_{kind}.{image_format}"
+        assert path.read_bytes().startswith(MAGIC[image_format]), path
+    assert not list(tmp_path.glob("*.png"))
+
+
+def test_an_unknown_format_is_rejected(c_file, tmp_path):
+    result = runner.invoke(
+        app, [str(c_file), "--draw-cfg", "--format", "gif", "-o", str(tmp_path)]
+    )
+
+    assert result.exit_code == 2
+    assert "gif" in result.output
+    assert list(tmp_path.iterdir()) == [c_file]
+
+
+def graph_of_size(width_inches: float, height_inches: float) -> pgv.AGraph:
+    graph = pgv.AGraph()
+    graph.graph_attr["bb"] = f"0,0,{width_inches * 72},{height_inches * 72}"
+    return graph
+
+
+def test_a_small_png_is_drawn_at_full_resolution():
+    assert png_dpi(graph_of_size(10, 20)) == DEFAULT_DPI
+
+
+def test_a_large_png_is_drawn_under_the_pixel_cap():
+    dpi = png_dpi(graph_of_size(1000, 100))
+
+    assert dpi == 15
+    assert (1000 * dpi) * (100 * dpi) <= MAX_PNG_PIXELS < (1000 * 16) * (100 * 16)
+
+
+def test_a_png_exactly_at_the_cap_keeps_full_resolution():
+    side = MAX_PNG_PIXELS**0.5 / DEFAULT_DPI
+
+    assert png_dpi(graph_of_size(side, side)) == DEFAULT_DPI
+
+
+def test_a_png_just_over_the_cap_is_scaled_down():
+    side = (MAX_PNG_PIXELS**0.5 + 1) / DEFAULT_DPI
+
+    assert png_dpi(graph_of_size(side, side)) == DEFAULT_DPI - 1
+
+
+@pytest.mark.parametrize("image_format", ["png", "svg"])
+def test_draw_graph_limits_the_layout_and_sets_dpi_for_png(tmp_path, image_format):
+    graph = pgv.AGraph(directed=True)
+    graph.add_edge("a", "b")
+    path = tmp_path / f"graph.{image_format}"
+
+    draw_graph(graph, path)
+
+    assert path.read_bytes().startswith(MAGIC[image_format])
+    assert graph.graph_attr["nslimit"] == NETWORK_SIMPLEX_LIMIT
+    expected = str(DEFAULT_DPI) if image_format == "png" else ""
+    assert (graph.graph_attr.get("dpi") or "") == expected
+
+
+def test_a_large_drawing_is_saved_under_the_pixel_cap(tmp_path):
+    graph = pgv.AGraph()
+    graph.add_node("big", shape="box", width="60", height="60", fixedsize="true")
+    path = tmp_path / "graph.png"
+
+    draw_graph(graph, path)
+
+    header = path.read_bytes()[:24]
+    width, height = int.from_bytes(header[16:20]), int.from_bytes(header[20:24])
+    assert width * height <= MAX_PNG_PIXELS
+    assert int(graph.graph_attr["dpi"]) == png_dpi(graph) < DEFAULT_DPI

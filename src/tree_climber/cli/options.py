@@ -18,6 +18,7 @@ class AnalysisOptions:
     verbose: bool
     quiet: bool
     timing: bool
+    image_format: str = "png"
 
 
 @dataclass
@@ -32,6 +33,7 @@ class TaintOptions:
     draw_dfg: bool
     output_dir: Path
     show: bool
+    image_format: str = "png"
 
 
 @dataclass

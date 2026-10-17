@@ -54,6 +54,8 @@ This writes `out/classify.py_cfg.png` (CFG with dashed red def-use edges) and `o
 
 Add `--show` to open the saved images in your default image viewer; without it the images are only saved.
 
+`--format svg` (or `pdf`) saves the drawings in that format instead of PNG. SVG is much faster for large files.
+
 ## 2. Dump the graph as text
 
 The CLI draws images, and answers a few questions as text (`tree-climber taint` and `tree-climber query`, see [Tracing user input](#tracing-user-input)). To compare against expected edges, paste this into a file such as `dump.py`. It prints CFG edges and def-use chains for Python read from stdin.

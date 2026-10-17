@@ -9,7 +9,7 @@ from tree_climber.cli.visualizers.base_visualizer import (
     get_node_display,
     get_node_label,
 )
-from tree_climber.cli.visualizers.utils import ast_label
+from tree_climber.cli.visualizers.utils import ast_label, draw_graph
 
 from .constants import (
     AST_OVERLAY_BORDER_COLOR,
@@ -18,7 +18,6 @@ from .constants import (
     AST_OVERLAY_LINKING_EDGE_COLOR,
     AST_OVERLAY_NODE_COLOR,
     AST_OVERLAY_SHOW_ONLY_NAMED,
-    DEFAULT_DPI,
 )
 
 
@@ -40,7 +39,6 @@ class BiGraphVisualizer(BaseVisualizer):
         G.graph_attr.update(
             ranksep="0.2",
             nodesep="0.45",
-            dpi=str(DEFAULT_DPI),
             rankdir="TB",
             splines=True,
             margin="0.05",
@@ -116,5 +114,5 @@ class BiGraphVisualizer(BaseVisualizer):
                 label=dfg_label,
             )
 
-        G.draw(str(self.output_path("cpg")), prog="dot")
+        draw_graph(G, self.output_path("cpg"))
         print(f"Saved CPG visualization: {self.output_path('cpg')}")

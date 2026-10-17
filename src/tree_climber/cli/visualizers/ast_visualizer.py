@@ -7,7 +7,7 @@ from tree_climber.cli.visualizers.base_visualizer import (
     BaseVisualizer,
 )
 from tree_climber.ast_utils import iter_ast_edges
-from tree_climber.cli.visualizers.utils import ast_label
+from tree_climber.cli.visualizers.utils import ast_label, draw_graph
 
 from .constants import (
     AST_OVERLAY_BORDER_COLOR,
@@ -15,7 +15,6 @@ from .constants import (
     AST_OVERLAY_FONT_SIZE,
     AST_OVERLAY_NODE_COLOR,
     AST_OVERLAY_SHOW_ONLY_NAMED,
-    DEFAULT_DPI,
 )
 
 
@@ -32,7 +31,6 @@ class ASTVisualizer(BaseVisualizer):
         G_ast.graph_attr.update(
             ranksep="0.5",
             nodesep="0.2",
-            dpi=str(DEFAULT_DPI),
             splines="line",
         )
         G_ast.node_attr.update(style="filled")
@@ -61,5 +59,5 @@ class ASTVisualizer(BaseVisualizer):
             if not G_ast.has_node(cid):
                 add_ast_node(G_ast, child, cid)
             G_ast.add_edge(f"ast_{parent.id}", cid)
-        G_ast.draw(str(self.output_path("ast")), prog="dot")
+        draw_graph(G_ast, self.output_path("ast"))
         print(f"Saved AST visualization: {self.output_path('ast')}")

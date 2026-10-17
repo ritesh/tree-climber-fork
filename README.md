@@ -94,7 +94,7 @@ Example bigraph CPG
 
 Options also accept underscores (`--draw_cfg`), for compatibility with earlier versions. Try `tree-climber --help` to see all options, `tree-climber --version`, or `tree-climber --list-languages`.
 
-Graphs are saved as PNG files next to the input, or in the directory given with `-o`.
+Graphs are saved as PNG files next to the input, or in the directory given with `-o`. `--format svg` (or `pdf`) saves them in that format instead; SVG is much faster to draw for large files, and a large PNG is drawn at a lower resolution to keep it under 25 megapixels.
 
 Two commands answer questions as text: `tree-climber taint app.py` traces untrusted input to dangerous calls and prints each finding with its path (`--rules rules.json` for your own rules, `--json`, and `--draw-cfg`/`--draw-dfg` to draw a finding's path), and `tree-climber query app.py --calls system` or `--slice-from 12` lists the callers of a function or a slice from a line. See the [taint analysis guide](./docs/taint-guide.md) and [Tracing user input](./docs/python-guide.md#tracing-user-input).
 
