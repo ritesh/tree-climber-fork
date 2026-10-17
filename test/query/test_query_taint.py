@@ -16,7 +16,7 @@ from tree_climber.dataflow.analyses.def_use import DefUseSolver
 from tree_climber.dataflow.analyses.reaching_definitions import (
     ReachingDefinitionsProblem,
 )
-from tree_climber.dataflow.solver import RoundRobinSolver
+from tree_climber.dataflow.solver import WorklistSolver
 from tree_climber.query import CodeGraph
 
 SOURCES = {"input", "getenv", "source"}
@@ -30,7 +30,7 @@ def prototype(code):
     builder = CFGBuilder("python")
     builder.setup_parser()
     cfg = builder.build_cfg(code)
-    reaching = RoundRobinSolver().solve(cfg, ReachingDefinitionsProblem())
+    reaching = WorklistSolver().solve(cfg, ReachingDefinitionsProblem())
     chains = DefUseSolver().solve(cfg, reaching).chains
     uses = {
         (c.variable_name, c.definition): c.uses for cs in chains.values() for c in cs

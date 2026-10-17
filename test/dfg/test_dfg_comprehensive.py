@@ -16,7 +16,7 @@ from tree_climber.dataflow.analyses.reaching_definitions import (
     ReachingDefinitionsProblem,
 )
 from tree_climber.dataflow.analyses.use_def import UseDefSolver
-from tree_climber.dataflow.solver import RoundRobinSolver
+from tree_climber.dataflow.solver import WorklistSolver
 
 
 class DFGTestHelper:
@@ -35,7 +35,7 @@ class DFGTestHelper:
 
         # Run dataflow analysis
         problem = ReachingDefinitionsProblem()
-        solver = RoundRobinSolver()
+        solver = WorklistSolver()
         dataflow_result = solver.solve(cfg, problem)
 
         # Compute def-use and use-def chains

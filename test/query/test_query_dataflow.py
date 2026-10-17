@@ -8,7 +8,7 @@ from tree_climber.dataflow.analyses.reaching_definitions import (
     ReachingDefinitionsProblem,
 )
 from tree_climber.dataflow.analyses.use_def import UseDefSolver
-from tree_climber.dataflow.solver import RoundRobinSolver
+from tree_climber.dataflow.solver import WorklistSolver
 from tree_climber.query import DEF_USE, CodeGraph, DataFlowEdge
 
 
@@ -81,7 +81,7 @@ def test_use_def_is_the_inverse_of_def_use(language):
 @LANGUAGES
 def test_chains_agree_with_the_solvers(language):
     graph = build(language)
-    reaching = RoundRobinSolver().solve(graph.cfg, ReachingDefinitionsProblem())
+    reaching = WorklistSolver().solve(graph.cfg, ReachingDefinitionsProblem())
     chains = DefUseSolver().solve(graph.cfg, reaching).chains
     use_def = UseDefSolver().solve(graph.cfg, reaching).chains
 

@@ -3,7 +3,7 @@ from tree_climber.dataflow.analyses.reaching_definitions import (
     ReachingDefinitionsProblem,
 )
 from tree_climber.dataflow.analyses.use_def import UseDefSolver
-from tree_climber.dataflow.solver import RoundRobinSolver
+from tree_climber.dataflow.solver import WorklistSolver
 
 if __name__ == "__main__":
     # Example usage of the dataflow framework
@@ -61,7 +61,7 @@ if __name__ == "__main__":
     # Analyze reaching definitions
     problem = ReachingDefinitionsProblem()
 
-    solver = RoundRobinSolver()
+    solver = WorklistSolver()
     result = solver.solve(cfg, problem)
     print("Reaching definitions:")
     print("In facts:")

@@ -68,7 +68,7 @@ from tree_climber.dataflow.analyses.def_use import DefUseSolver
 from tree_climber.dataflow.analyses.reaching_definitions import (
     ReachingDefinitionsProblem,
 )
-from tree_climber.dataflow.solver import RoundRobinSolver
+from tree_climber.dataflow.solver import WorklistSolver
 
 builder = CFGBuilder("python")
 builder.setup_parser()
@@ -88,7 +88,7 @@ for node in cfg.nodes.values():
         label = node.edge_labels.get(succ)
         print(f"  {name(node.id)} -> {name(succ)}" + (f"  [{label}]" if label else ""))
 
-reaching = RoundRobinSolver().solve(cfg, ReachingDefinitionsProblem())
+reaching = WorklistSolver().solve(cfg, ReachingDefinitionsProblem())
 chains = DefUseSolver().solve(cfg, reaching).chains
 print("Def-use chains")
 for var, var_chains in chains.items():

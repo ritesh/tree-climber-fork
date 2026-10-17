@@ -36,7 +36,7 @@ from tree_climber.dataflow.analyses.reaching_definitions import (
     ReachingDefinitionsProblem,
 )
 from tree_climber.dataflow.interprocedural import analyze_interprocedural
-from tree_climber.dataflow.solver import RoundRobinSolver
+from tree_climber.dataflow.solver import WorklistSolver
 from tree_climber.dataflow.control_dependence import control_dependence
 from tree_climber.query.edges import ARGUMENT, CONTROL, DEF_USE, FREE_VARIABLE, RETURN
 from tree_climber.query.path import Path, PathStep
@@ -106,7 +106,7 @@ class _Program:
                         and label != "exception"
                     ):
                         self.governed.setdefault(branch, []).append(node_id)
-        reaching = RoundRobinSolver().solve(cfg, ReachingDefinitionsProblem())
+        reaching = WorklistSolver().solve(cfg, ReachingDefinitionsProblem())
         self.def_use: Dict[Tuple[int, str], List[int]] = {}
         for chains in DefUseSolver().solve(cfg, reaching).chains.values():
             for chain in chains:

@@ -9,7 +9,7 @@ from tree_climber.dataflow.analyses.def_use import DefUseSolver
 from tree_climber.dataflow.analyses.reaching_definitions import (
     ReachingDefinitionsProblem,
 )
-from tree_climber.dataflow.solver import RoundRobinSolver
+from tree_climber.dataflow.solver import WorklistSolver
 
 Edge = Tuple[str, str, Optional[str]]
 
@@ -60,7 +60,7 @@ def entry_names(cfg: CFG) -> List[str]:
 def def_use_chains(code: str, variable: str) -> Dict[str, List[str]]:
     """Def-use chains of a variable as {definition text: sorted use texts}."""
     cfg = build_cfg(code)
-    reaching = RoundRobinSolver().solve(cfg, ReachingDefinitionsProblem())
+    reaching = WorklistSolver().solve(cfg, ReachingDefinitionsProblem())
     result = DefUseSolver().solve(cfg, reaching)
     return {
         label(cfg.nodes[chain.definition]): sorted(
@@ -119,7 +119,7 @@ def function_edges(cfg: CFG, name: str) -> Set[Edge]:
 def function_chains(cfg: CFG, name: str) -> Dict[str, Dict[str, List[str]]]:
     """Def-use chains inside one function: {variable: {definition: [uses]}}."""
     members = function_nodes(cfg, name)
-    reaching = RoundRobinSolver().solve(cfg, ReachingDefinitionsProblem())
+    reaching = WorklistSolver().solve(cfg, ReachingDefinitionsProblem())
     result = DefUseSolver().solve(cfg, reaching)
     chains: Dict[str, Dict[str, List[str]]] = {}
     for variable, variable_chains in result.chains.items():

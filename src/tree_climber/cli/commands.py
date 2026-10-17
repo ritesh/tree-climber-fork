@@ -20,7 +20,7 @@ from tree_climber.dataflow.analyses.def_use import DefUseResult, DefUseSolver
 from tree_climber.dataflow.analyses.reaching_definitions import (
     ReachingDefinitionsProblem,
 )
-from tree_climber.dataflow.solver import RoundRobinSolver
+from tree_climber.dataflow.solver import WorklistSolver
 from tree_climber.query import CodeGraph
 from tree_climber.reporting import (
     load_rules,
@@ -148,7 +148,7 @@ def _build_cfg(ast_root: Tree, language: str) -> CFG:
 def _analyze_dataflow(cfg: CFG) -> DefUseResult:
     """Perform reaching definitions dataflow analysis."""
     problem = ReachingDefinitionsProblem()
-    dataflow_solver = RoundRobinSolver()
+    dataflow_solver = WorklistSolver()
     def_use_solver = DefUseSolver()
     return def_use_solver.solve(cfg, dataflow_solver.solve(cfg, problem))
 
