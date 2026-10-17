@@ -353,7 +353,7 @@ log-injection logger.info 0
   --def_use name--> [13] logger.info("login: " + name)
 ```
 
-`analyze_source` takes a `Rule`, a list of rules, or a `RuleSet`. `RuleSet.load("rules.json")` reads a rule file, `RuleSet.from_dict(...)` a parsed one (from YAML, for example), and `builtin_rules("python")` the built-in rules. A `Finding` has `rule` (the rule id), `source` and `sink` (node ids), `sink_call`, `argument`, `path` (a query `Path` whose `steps` have `node`, `edge` and `variable`), and `to_dict()` for JSON. With a CFG you already built, call `analyze(cfg, rules, language)` instead.
+`analyze_source` takes a `Rule`, a list of rules, or a `RuleSet`. `RuleSet.load("rules.json")` reads a rule file, `RuleSet.from_dict(...)` a parsed one (from YAML, for example), and `builtin_rules("python")` the built-in rules. A `Finding` has `rule` (the rule id), `source` and `sink` (node ids), `sink_call`, `argument`, `path` (a query `Path` whose `steps` have `node`, `edge` and `variable`), and `to_dict()` for JSON. With a CFG you already built, call `analyze(cfg, rules, language)` instead. Pass a `CodeGraph` in place of the CFG to reuse the data flow it has already solved.
 
 Two options make the analysis more precise, and are only available from Python. `implicit_flows=True` follows decisions made on tainted data: here the command does not contain the input, but which command runs depends on it:
 

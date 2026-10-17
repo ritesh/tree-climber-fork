@@ -6,7 +6,9 @@ slow files.
 
 Each file runs in a worker process with a time limit, so a crash, a hang or a
 dying worker is reported for that file and the run goes on. With a baseline
-(known failures), the exit status is 1 only for failures not in it.
+(known failures), the exit status is 1 only for failures not in it. The stages
+of a file share one `CodeGraph`, so a stage's time leaves out what an earlier
+stage already computed.
 """
 
 import argparse
@@ -24,15 +26,8 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Set, Tuple
 
 from tree_climber.cfg.builder import CFGBuilder
-from tree_climber.cfg.visitor import CFG
-from tree_climber.dataflow.analyses.def_use import DefUseSolver
-from tree_climber.dataflow.analyses.reaching_definitions import (
-    ReachingDefinitionsProblem,
-)
-from tree_climber.dataflow.control_dependence import control_dependence
-from tree_climber.dataflow.interprocedural import analyze_interprocedural
-from tree_climber.dataflow.solver import WorklistSolver
 from tree_climber.language_registry import SUPPORTED_LANGUAGES, language_for_extension
+from tree_climber.query import CodeGraph
 from tree_climber.taint import analyze, builtin_rules
 
 
@@ -40,31 +35,29 @@ from tree_climber.taint import analyze, builtin_rules
 class Work:
     language: str
     source: str
-    cfg: Optional[CFG] = None
+    code_graph: Optional[CodeGraph] = None
 
-    def graph(self) -> CFG:
-        assert self.cfg is not None
-        return self.cfg
+    def graph(self) -> CodeGraph:
+        assert self.code_graph is not None
+        return self.code_graph
 
 
 def _build(work: Work) -> None:
     builder = CFGBuilder(work.language)
     builder.setup_parser()
-    work.cfg = builder.build_cfg(work.source)
+    work.code_graph = CodeGraph(builder.build_cfg(work.source))
 
 
 def _dataflow(work: Work) -> None:
-    cfg = work.graph()
-    reaching = WorklistSolver().solve(cfg, ReachingDefinitionsProblem())
-    DefUseSolver().solve(cfg, reaching)
+    _ = work.graph().def_use_chains
 
 
 def _interprocedural(work: Work) -> None:
-    analyze_interprocedural(work.graph())
+    _ = work.graph().interprocedural_flows
 
 
 def _control(work: Work) -> None:
-    control_dependence(work.graph())
+    _ = work.graph().control_dependence
 
 
 def _taint(work: Work) -> None:
@@ -165,7 +158,7 @@ def run_file(task: Task, stages: Sequence[str], timeout: float) -> FileResult:
             finally:
                 result.seconds[stage] = time.perf_counter() - start
             if stage == "cfg":
-                result.nodes = len(work.graph().nodes)
+                result.nodes = len(work.graph().cfg.nodes)
     except _Timeout:
         result.failure = Failure(stage, TIMEOUT, f"over {timeout:g} s")
     except Exception as error:

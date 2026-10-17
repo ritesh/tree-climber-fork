@@ -450,6 +450,35 @@ class TestFindings:
             ("eval", "eval"),
         ]
 
+    @pytest.mark.parametrize("precise", [False, True])
+    def test_a_code_graph_gives_the_findings_of_its_cfg(self, precise):
+        from tree_climber.taint import builtin_rules
+
+        graph = CodeGraph.from_source("python", GUIDE_APP)
+        rules = builtin_rules("python")
+
+        assert analyze(graph, rules, "python", precise, precise) == analyze(
+            graph.cfg, rules, "python", precise, precise
+        )
+
+    def test_a_code_graph_s_data_flow_is_not_solved_again(self, monkeypatch):
+        from tree_climber.query import graph as module
+        from tree_climber.taint import builtin_rules
+
+        graph = CodeGraph.from_source("python", GUIDE_APP)
+        expected = analyze(graph, builtin_rules("python"), "python", True, True)
+        for name in (
+            "ReachingDefinitionsProblem",
+            "analyze_interprocedural",
+            "control_dependence",
+        ):
+            monkeypatch.setattr(module, name, lambda *args: pytest.fail("solved"))
+
+        found = analyze(graph, builtin_rules("python"), "python", True, True)
+
+        assert expected
+        assert found == expected
+
     def test_paths_are_query_paths(self):
         (finding,) = analyze_source("python", "x = input()\nsystem(x)\n", BASIC)
         graph = CodeGraph.from_source("python", "x = input()\nsystem(x)\n")

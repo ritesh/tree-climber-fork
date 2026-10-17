@@ -322,9 +322,9 @@ def test_results_are_in_a_stable_order(language):
 @LANGUAGES
 def test_results_do_not_depend_on_the_solver_order(language):
     graph = build(language)
-    graph._def_use.chains["y"].reverse()
+    graph.def_use_chains.chains["y"].reverse()
     graph._use_def.chains["y"].reverse()
-    graph._def_use.chains["total"].reverse()
+    graph.def_use_chains.chains["total"].reverse()
 
     assert list(graph.def_use("y")) == sorted(graph.def_use("y"))
     assert list(graph.use_def("y")) == sorted(graph.use_def("y"))

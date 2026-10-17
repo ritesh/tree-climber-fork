@@ -653,7 +653,7 @@ Check:
 
 ### Querying the graph
 
-`tree_climber.query` answers questions about the graph without a hand-written traversal. Build a `CodeGraph` once, from source or from a `CFG` you already have (`CodeGraph.from_cfg(cfg)`); the same API works for C, Java and Python. The examples below use this program:
+`tree_climber.query` answers questions about the graph without a hand-written traversal. Build a `CodeGraph` once, from source or from a `CFG` you already have (`CodeGraph.from_cfg(cfg)`); the same API works for C, Java and Python. It solves the data flow on first use and keeps it: `reaching_definitions`, `def_use_chains`, `interprocedural_flows` and `control_dependence` are those results, shared and not to be modified, and `taint.analyze(graph, ...)` reuses them. The examples below use this program:
 
 ```python
 def handler(request):

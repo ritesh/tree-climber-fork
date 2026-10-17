@@ -1,9 +1,13 @@
 import re
 from dataclasses import dataclass
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from tree_climber.cfg.visitor import CFG
-from tree_climber.dataflow.interprocedural import RECEIVER, analyze_interprocedural
+from tree_climber.dataflow.interprocedural import (
+    RECEIVER,
+    InterproceduralResult,
+    analyze_interprocedural,
+)
 
 FLOW = "flow"
 TRUE = "true"
@@ -62,16 +66,19 @@ def _receiver_variables(receiver: str, uses: List[str]) -> List[str]:
     ]
 
 
-def interprocedural_edges(cfg: CFG) -> List[DataFlowEdge]:
+def interprocedural_edges(
+    cfg: CFG, flows: Optional[InterproceduralResult] = None
+) -> List[DataFlowEdge]:
     """The argument, return and free-variable flows of `analyze_interprocedural`
     as `DataFlowEdge`s, for the `extra_edges` of the data-flow queries.
 
     An argument flows from each variable it reads, and from a nested call that is
     the argument when a return flows into that call; a return flows from the whole
     return node to the variables the call is assigned to, or to the call's result
-    placeholder.
+    placeholder. `flows` are the CFG's flows when already computed.
     """
-    flows = analyze_interprocedural(cfg)
+    if flows is None:
+        flows = analyze_interprocedural(cfg)
     returned = {(flow.call.node, flow.call.site) for flow in flows.return_flows}
     edges: Dict[DataFlowEdge, None] = {}
 

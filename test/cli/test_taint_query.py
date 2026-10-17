@@ -309,6 +309,16 @@ class TestTaint:
         ]
         assert "Saved finding 2 on the DFG" in result.output
 
+    def test_drawing_reuses_the_data_flow_of_the_analysis(self, in_tmp, monkeypatch):
+        monkeypatch.setattr(
+            "tree_climber.cli.commands._analyze_dataflow",
+            lambda cfg: pytest.fail("the data flow was solved again"),
+        )
+
+        result = invoke("taint", "app.py", "--finding", "1", "--draw-dfg")
+
+        assert result.exit_code == 0, result.output
+
     def test_draw_in_another_format(self, in_tmp):
         result = invoke(
             "taint", "app.py", "--finding", "1", "--draw-cfg", "--format", "svg"
