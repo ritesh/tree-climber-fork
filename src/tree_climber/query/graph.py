@@ -26,7 +26,7 @@ from tree_climber.dataflow.control_dependence import (
     ControlDependence,
     control_dependence,
 )
-from tree_climber.dataflow.solver import RoundRobinSolver
+from tree_climber.dataflow.solver import WorklistSolver
 from tree_climber.query.edges import (
     CALL_KINDS,
     DEF_USE,
@@ -344,7 +344,7 @@ class CodeGraph:
 
     @cached_property
     def _reaching(self):
-        return RoundRobinSolver().solve(self.cfg, ReachingDefinitionsProblem())
+        return WorklistSolver().solve(self.cfg, ReachingDefinitionsProblem())
 
     @cached_property
     def _def_use(self) -> DefUseResult:

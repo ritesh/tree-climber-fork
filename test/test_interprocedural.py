@@ -23,7 +23,7 @@ from tree_climber.dataflow.interprocedural import (
     InterproceduralResult,
     analyze_interprocedural,
 )
-from tree_climber.dataflow.solver import RoundRobinSolver
+from tree_climber.dataflow.solver import WorklistSolver
 
 
 def build(language: str, source: str) -> CFG:
@@ -700,7 +700,7 @@ class TestResult:
     def test_callee_locals_do_not_leak_into_the_caller(self):
         source = "def f():\n    x = 1\n    return x\nx = 0\nf()\nprint(x)\n"
         cfg = build("python", source)
-        reaching = RoundRobinSolver().solve(cfg, ReachingDefinitionsProblem())
+        reaching = WorklistSolver().solve(cfg, ReachingDefinitionsProblem())
         chains = DefUseSolver().solve(cfg, reaching).chains
 
         defs_reaching_print = {
@@ -719,7 +719,7 @@ def reaches_sink(language: str, source: str, source_call: str, sink: str) -> boo
     starting from the results of calls to `source_call`, does anything reach an
     argument of a call to `sink`?"""
     cfg = build(language, source)
-    reaching = RoundRobinSolver().solve(cfg, ReachingDefinitionsProblem())
+    reaching = WorklistSolver().solve(cfg, ReachingDefinitionsProblem())
     chains = DefUseSolver().solve(cfg, reaching).chains
     flows = analyze_interprocedural(cfg)
     uses: Dict[Tuple[str, int], List[int]] = {

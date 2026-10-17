@@ -31,7 +31,7 @@ from tree_climber.dataflow.analyses.reaching_definitions import (
 )
 from tree_climber.dataflow.control_dependence import control_dependence
 from tree_climber.dataflow.interprocedural import analyze_interprocedural
-from tree_climber.dataflow.solver import RoundRobinSolver
+from tree_climber.dataflow.solver import WorklistSolver
 from tree_climber.language_registry import SUPPORTED_LANGUAGES, language_for_extension
 from tree_climber.taint import analyze, builtin_rules
 
@@ -55,7 +55,7 @@ def _build(work: Work) -> None:
 
 def _dataflow(work: Work) -> None:
     cfg = work.graph()
-    reaching = RoundRobinSolver().solve(cfg, ReachingDefinitionsProblem())
+    reaching = WorklistSolver().solve(cfg, ReachingDefinitionsProblem())
     DefUseSolver().solve(cfg, reaching)
 
 

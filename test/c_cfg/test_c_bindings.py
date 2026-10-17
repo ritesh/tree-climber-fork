@@ -18,7 +18,7 @@ from tree_climber.dataflow.analyses.def_use import DefUseSolver
 from tree_climber.dataflow.analyses.reaching_definitions import (
     ReachingDefinitionsProblem,
 )
-from tree_climber.dataflow.solver import RoundRobinSolver
+from tree_climber.dataflow.solver import WorklistSolver
 
 
 def bindings_of(statement: str):
@@ -127,7 +127,7 @@ def def_use_chains(code: str, variable: str):
     builder = CFGBuilder("c")
     builder.setup_parser()
     cfg = builder.build_cfg(code)
-    reaching = RoundRobinSolver().solve(cfg, ReachingDefinitionsProblem())
+    reaching = WorklistSolver().solve(cfg, ReachingDefinitionsProblem())
     result = DefUseSolver().solve(cfg, reaching)
     return {
         cfg.nodes[chain.definition].source_text.strip(): sorted(

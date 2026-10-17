@@ -18,7 +18,7 @@ from tree_climber.dataflow.analyses.reaching_definitions import (
     ReachingDefinitionsProblem,
 )
 from tree_climber.dataflow.analyses.use_def import UseDefSolver
-from tree_climber.dataflow.solver import RoundRobinSolver
+from tree_climber.dataflow.solver import WorklistSolver
 from tree_climber.viz.app import ParseRequest, parse_source_code
 
 EMPTY_PROGRAMS = [
@@ -58,7 +58,7 @@ def test_a_program_with_nothing_to_analyze_gives_an_empty_cfg(language, code):
 def test_the_dataflow_solvers_accept_an_empty_cfg(language, code):
     cfg = build(language, code)
 
-    result = RoundRobinSolver().solve(cfg, ReachingDefinitionsProblem())
+    result = WorklistSolver().solve(cfg, ReachingDefinitionsProblem())
 
     assert DefUseSolver().solve(cfg, result).chains == {}
     assert UseDefSolver().solve(cfg, result).chains == {}

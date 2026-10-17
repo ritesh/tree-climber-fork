@@ -18,7 +18,7 @@ from tree_climber.dataflow.analyses.def_use import DefUseSolver
 from tree_climber.dataflow.analyses.reaching_definitions import (
     ReachingDefinitionsProblem,
 )
-from tree_climber.dataflow.solver import RoundRobinSolver
+from tree_climber.dataflow.solver import WorklistSolver
 from tree_climber.language_registry import (
     DEFAULT_LANGUAGE,
     SUPPORTED_LANGUAGES,
@@ -221,7 +221,7 @@ async def parse_source_code(request: ParseRequest) -> ParseResponse:
         # Analyze reaching definitions
         problem = ReachingDefinitionsProblem()
 
-        solver = RoundRobinSolver()
+        solver = WorklistSolver()
         result = solver.solve(cfg, problem)
 
         # Analyze def-use chains

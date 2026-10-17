@@ -1,5 +1,5 @@
 # Define a simple dataflow problem (e.g., reaching definitions)
-from typing import Iterable, List, Optional, Set
+from typing import Dict, FrozenSet, Iterable, List, Optional, Set, Tuple
 
 from tree_sitter import Node
 
@@ -68,17 +68,32 @@ def extract_function_call_arguments(ast_node: Node) -> List[str]:
 
 class Union(MeetOperation):
     def __call__(self, facts: Iterable[frozenset[DataflowFact]]) -> Set[DataflowFact]:
-        return set().union(*[set(fact_set) for fact_set in facts])
+        return set().union(*facts)
 
 
 class ReachingDefinitionsGenKill(TransferFunction):
+    def __init__(self) -> None:
+        self._gen: Dict[
+            int, Tuple[CFGNode, FrozenSet[str], FrozenSet[DataflowFact]]
+        ] = {}
+
+    def gen(self, node: CFGNode) -> Tuple[FrozenSet[str], FrozenSet[DataflowFact]]:
+        """The names the node defines and their facts, built once per node so that
+        facts compare by identity."""
+        cached = self._gen.get(node.id)
+        if cached is None or cached[0] is not node:
+            names = frozenset(
+                node.metadata.variable_definitions if node.ast_node else []
+            )
+            facts = frozenset(ReachingDefinition(name, node.id) for name in names)
+            cached = (node, names, facts)
+            self._gen[node.id] = cached
+        return cached[1], cached[2]
+
     def __call__(self, node: CFGNode, in_facts: Set[DataflowFact]) -> Set[DataflowFact]:
-        node_id = node.id
-        defined_variables = node.metadata.variable_definitions if node.ast_node else []
-        gen_facts = {
-            ReachingDefinition(variable=var, node_id=node_id)
-            for var in defined_variables
-        }
+        defined_variables, gen_facts = self.gen(node)
+        if not defined_variables:
+            return set(in_facts)
         kill_facts = {
             fact
             for fact in in_facts
