@@ -16,6 +16,7 @@ from tree_climber.cfg.builder import CFGBuilder
 from tree_climber.language_registry import language_for_extension
 from tree_climber.reporting import node_line
 from tree_climber.taint import analyze, builtin_rules
+from tree_climber.taint.engine import _Program
 
 CORPUS = Path(__file__).parent / "corpus"
 FILES = sorted(
@@ -130,3 +131,30 @@ def test_every_finding_is_annotated(path: Path):
         if case.kind in ("ruleid", "todook")
     }
     assert sorted(findings(path) - expected) == []
+
+
+@pytest.mark.parametrize(
+    "path", [pytest.param(p, id=str(p.relative_to(CORPUS))) for p in FILES]
+)
+def test_skipping_origins_that_reach_no_sink_changes_nothing(path: Path, monkeypatch):
+    source = path.read_text()
+    match = OPTIONS.search(source)
+    options = set(match.group(1).split()) if match else set()
+    builder = CFGBuilder(language(path))
+    builder.setup_parser()
+    cfg = builder.build_cfg(source)
+    flags = dict(
+        implicit_flows="implicit_flows" in options,
+        field_sensitive="field_sensitive" in options,
+    )
+    rules = builtin_rules(language(path))
+
+    pruned = analyze(cfg, rules, language(path), **flags)
+    monkeypatch.setattr(
+        _Program, "reaching_sinks", lambda self, rule: set(self.cfg.nodes)
+    )
+    unpruned = analyze(cfg, rules, language(path), **flags)
+
+    assert [str(finding) for finding in pruned] == [
+        str(finding) for finding in unpruned
+    ]

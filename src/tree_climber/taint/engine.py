@@ -16,6 +16,7 @@ from typing import (
     Any,
     Deque,
     Dict,
+    FrozenSet,
     Iterable,
     List,
     Optional,
@@ -95,6 +96,8 @@ class _Program:
         self._origins: Dict[Source, List[_Origin]] = {}
         self._callers: Optional[Dict[str, List[int]]] = None
         self._raw: Optional[List[Tuple[CFGNode, bytes]]] = None
+        self._into: Optional[Dict[int, Set[int]]] = None
+        self._reach: Dict[FrozenSet[str], Set[int]] = {}
         self.governed: Dict[int, List[int]] = {}
         self.cases: Dict[int, List[int]] = {}
         if implicit_flows:
@@ -165,22 +168,69 @@ class _Program:
             self._origins[source] = self._find_origins(source)
         return self._origins[source]
 
+    def calling(self, *patterns: str) -> Set[int]:
+        """The nodes with a call whose callee text matches one of the patterns,
+        matched once per distinct callee text."""
+        if self._callers is None:
+            self._callers = {}
+            for node_id, node in self.cfg.nodes.items():
+                for site in node.metadata.call_sites:
+                    self._callers.setdefault(site.callee_text, []).append(node_id)
+        return {
+            node_id
+            for callee, callers in self._callers.items()
+            if any(fnmatchcase(callee, pattern) for pattern in patterns)
+            for node_id in callers
+        }
+
+    def reaching_sinks(self, rule: Rule) -> Set[int]:
+        """The nodes from which taint could reach a call to one of the rule's
+        sinks. A run only moves along def-use, free-variable, argument, return,
+        control and match-case flows, so the nodes that reach a sink call over
+        those flows, ignoring sanitizers, fields and argument positions, hold
+        every origin that can give a finding."""
+        patterns = frozenset(sink.call for sink in rule.sinks)
+        if patterns not in self._reach:
+            if self._into is None:
+                self._into = self._flows_into()
+            reach = self.calling(*patterns)
+            stack = list(reach)
+            while stack:
+                for earlier in self._into.get(stack.pop(), ()):
+                    if earlier not in reach:
+                        reach.add(earlier)
+                        stack.append(earlier)
+            self._reach[patterns] = reach
+        return self._reach[patterns]
+
+    def _flows_into(self) -> Dict[int, Set[int]]:
+        into: Dict[int, Set[int]] = {}
+
+        def flow(source: int, target: int) -> None:
+            into.setdefault(target, set()).add(source)
+
+        for flows in (self.def_use, self.free):
+            for (node, _), uses in flows.items():
+                for use in uses:
+                    flow(node, use)
+        for (node, _, _), callees in self.arguments.items():
+            for entry, _ in callees:
+                flow(node, entry)
+        for returned, calls in self.returns.items():
+            for call, _ in calls:
+                flow(returned, call)
+        for branch, governed in self.governed.items():
+            for node in governed:
+                flow(branch, node)
+        for subject, cases in self.cases.items():
+            for case in cases:
+                flow(subject, case)
+        return into
+
     def _find_origins(self, source: Source) -> List[_Origin]:
         cfg = self.cfg
         if source.call is not None:
-            if self._callers is None:
-                self._callers = {}
-                for node_id, node in cfg.nodes.items():
-                    for site in node.metadata.call_sites:
-                        self._callers.setdefault(site.callee_text, []).append(node_id)
-            pattern = source.call
-            nodes = {
-                node_id
-                for callee, callers in self._callers.items()
-                if fnmatchcase(callee, pattern)
-                for node_id in callers
-            }
-            return [_Origin(node_id, source) for node_id in sorted(nodes)]
+            return [_Origin(n, source) for n in sorted(self.calling(source.call))]
         if source.attribute is not None:
             pattern = source.attribute_pattern()
             assert pattern is not None
@@ -625,7 +675,11 @@ def analyze(
     program = _Program(graph, implicit_flows, field_sensitive)
     findings: Dict[Tuple[str, int, int, int, int], Finding] = {}
     for rule in _rules(rules, language):
-        for origin in _origins(program, rule):
+        origins = _origins(program, rule)
+        reach = program.reaching_sinks(rule) if origins else set()
+        for origin in origins:
+            if origin.node not in reach:
+                continue
             run = _Run(program, rule, origin)
             for (sink, s, i), value in run.run().items():
                 key = (rule.id, origin.node, sink, s, i)
