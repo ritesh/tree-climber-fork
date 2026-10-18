@@ -9,14 +9,19 @@ counts, minus its methods' bodies. Lambda bodies count, since they usually run
 during the statement that creates them (`sorted(xs, key=lambda x: f(x))`).
 """
 
-from typing import Dict, Iterator, List, Optional, Tuple
+from typing import AbstractSet, Dict, Iterator, List, Optional, Tuple
 
 from tree_sitter import Node
 
 from tree_climber.ast_utils import get_source_text
 from tree_climber.cfg.call_sites import CallRegions, link_call_flows, with_span
 from tree_climber.cfg.cfg_types import CallArgument, CallSite
-from tree_climber.cfg.languages.python_bindings import collect_uses, target_names
+from tree_climber.cfg.languages.python_bindings import (
+    Bindings,
+    collect_split_uses,
+    collect_uses,
+    target_names,
+)
 
 FLOW_BOUNDARIES = frozenset({"lambda"})
 
@@ -83,36 +88,39 @@ def direct_uses(ast_node: Node) -> List[str]:
 
 
 def _argument(
-    node: Node, cache: Dict[int, List[str]], blocked: Dict[int, List[str]]
+    node: Node, cache: Dict[int, List[str]], calls: AbstractSet[int]
 ) -> CallArgument:
-    def uses_of(expression: Node) -> List[str]:
-        uses = collect_uses(expression, cache)
-        cache[expression.id] = uses
-        return uses
+    def uses_of(expression: Node) -> Bindings:
+        bindings = collect_split_uses(expression, cache, calls)
+        cache[expression.id] = bindings.uses
+        return bindings
 
     if node.type == "keyword_argument":
         name = node.child_by_field_name("name")
         value = node.child_by_field_name("value")
         if name is not None and value is not None:
+            bindings = uses_of(value)
             return CallArgument(
                 text=get_source_text(value),
-                uses=uses_of(value),
+                uses=bindings.uses,
                 keyword=get_source_text(name),
                 kind="keyword",
-                direct_uses=collect_uses(value, blocked),
+                direct_uses=bindings.direct_uses,
             )
     if node.type in ("list_splat", "dictionary_splat") and node.named_children:
         inner = node.named_children[0]
+        bindings = uses_of(inner)
         return CallArgument(
             text=get_source_text(inner),
-            uses=uses_of(inner),
+            uses=bindings.uses,
             kind="star" if node.type == "list_splat" else "double_star",
-            direct_uses=collect_uses(inner, blocked),
+            direct_uses=bindings.direct_uses,
         )
+    bindings = uses_of(node)
     return CallArgument(
         text=get_source_text(node),
-        uses=uses_of(node),
-        direct_uses=collect_uses(node, blocked),
+        uses=bindings.uses,
+        direct_uses=bindings.direct_uses,
     )
 
 
@@ -154,20 +162,22 @@ def assigned_names(call: Node) -> List[str]:
     return names
 
 
-def call_sites(ast_node: Node) -> List[CallSite]:
-    """One site per call that runs when the node executes, in source order.
+def call_sites(ast_node: Node, calls: Optional[List[Node]] = None) -> List[CallSite]:
+    """One site per call that runs when the node executes, in source order;
+    `calls` is `list(call_nodes(ast_node))`, when known.
 
     Each argument's uses are computed from the inside out (innermost call first),
     reusing the uses of nested calls, so a deeply nested `f(f(f(...)))` costs
     linear time, not quadratic.
     """
-    calls = list(call_nodes(ast_node))
+    if calls is None:
+        calls = list(call_nodes(ast_node))
     cache: Dict[int, List[str]] = {}
-    blocked = outside_calls(calls)
+    call_ids = {call.id for call in calls}
     arguments: Dict[int, List[CallArgument]] = {}
     for call in reversed(calls):
         arguments[call.id] = [
-            _argument(a, cache, blocked) for a in _argument_nodes(call)
+            _argument(a, cache, call_ids) for a in _argument_nodes(call)
         ]
 
     pairs: List[Tuple[CallSite, Node]] = []
@@ -180,7 +190,9 @@ def call_sites(ast_node: Node) -> List[CallSite]:
             receiver=get_source_text(receiver) if receiver else None,
             arguments=arguments[call.id],
             assigned_to=assigned_names(call),
-            receiver_uses=collect_uses(receiver, blocked) if receiver else None,
+            receiver_uses=collect_split_uses(receiver, cache, call_ids).direct_uses
+            if receiver
+            else None,
         )
         pairs.append((with_span(site, call), call))
     link_call_flows(pairs, _regions, FLOW_BOUNDARIES)

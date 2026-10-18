@@ -18,7 +18,16 @@ Decisions worth knowing:
 """
 
 from dataclasses import dataclass, field
-from typing import Dict, Iterable, Iterator, List, Optional, Tuple, Union
+from typing import (
+    AbstractSet,
+    Dict,
+    Iterable,
+    Iterator,
+    List,
+    Optional,
+    Tuple,
+    Union,
+)
 
 from tree_sitter import Node
 
@@ -45,11 +54,13 @@ SEQUENCE_TARGETS = frozenset(
 class Bindings:
     definitions: List[str] = field(default_factory=list)
     uses: List[str] = field(default_factory=list)
+    direct_uses: List[str] = field(default_factory=list)
 
 
-def collect_bindings(node: Node) -> Bindings:
-    """Collect de-duplicated definitions and uses under an AST node."""
-    collector = _Collector()
+def collect_bindings(node: Node, calls: Iterable[Node] = ()) -> Bindings:
+    """Collect de-duplicated definitions and uses under an AST node, and in
+    `direct_uses` the uses outside every node of `calls`."""
+    collector = _Collector(calls={call.id for call in calls})
     collector.run((node, frozenset()))
     return collector.bindings
 
@@ -79,6 +90,17 @@ def collect_uses(node: Node, cache: Optional[Dict[int, List[str]]] = None) -> Li
     collector = _Collector(cache)
     collector.run((node, frozenset()))
     return collector.bindings.uses
+
+
+def collect_split_uses(
+    node: Node, cache: Dict[int, List[str]], calls: AbstractSet[int]
+) -> Bindings:
+    """The uses under an AST node, as `collect_uses` with `cache` gives them, and
+    in `direct_uses` those outside every node of `calls`. Each cached node must
+    be inside one of `calls`."""
+    collector = _Collector(cache, calls=calls)
+    collector.run((node, frozenset()))
+    return collector.bindings
 
 
 def target_names(node: Node) -> List[str]:
@@ -146,33 +168,14 @@ def parameter_infos(parameters: Node) -> List[ParameterInfo]:
     return infos
 
 
-def declared_scope_names(function: Node) -> Tuple[List[str], List[str]]:
-    """The names a function declares `global` and `nonlocal` (not those of the
-    functions and classes nested in it)."""
-    declared: Dict[str, List[str]] = {"global_statement": [], "nonlocal_statement": []}
-    body = function.child_by_field_name("body")
-    stack = [body] if body is not None else []
-    while stack:
-        node = stack.pop()
-        if node.type in declared:
-            declared[node.type].extend(
-                get_source_text(c)
-                for c in node.named_children
-                if c.type == "identifier"
-            )
-            continue
-        if node.type in ("function_definition", "class_definition", "lambda"):
-            continue
-        stack.extend(reversed(node.children))
-    return declared["global_statement"], declared["nonlocal_statement"]
+def function_scope_names(function: Node) -> Tuple[List[str], List[str], List[str]]:
+    """The names a function binds itself, and the names it declares `global` and
+    `nonlocal` (not those of the functions and classes nested in it).
 
-
-def collect_local_names(function: Node) -> List[str]:
-    """The names a function binds itself: its parameters and the names strongly
-    bound in its body (assignment, `for`, `with`, `except`, import, `def`,
-    `class`, walrus, `match` captures). Attribute and subscript writes read
-    their root name, they do not bind it. Names declared `global` or `nonlocal`
-    are not local."""
+    It binds its parameters and the names strongly bound in its body
+    (assignment, `for`, `with`, `except`, import, `def`, `class`, walrus,
+    `match` captures). Attribute and subscript writes read their root name, they
+    do not bind it. Names declared `global` or `nonlocal` are not local."""
     collector = _Collector(strong_only=True)
     parameters = function.child_by_field_name("parameters")
     body = function.child_by_field_name("body")
@@ -180,9 +183,11 @@ def collect_local_names(function: Node) -> List[str]:
     if body is not None:
         collector.run((body, frozenset()))
     names.extend(collector.bindings.definitions)
-    globals_, nonlocals = declared_scope_names(function)
+    globals_ = collector.declared["global_statement"]
+    nonlocals = collector.declared["nonlocal_statement"]
     excluded = set(globals_) | set(nonlocals)
-    return [name for name in dict.fromkeys(names) if name not in excluded]
+    locals_ = [name for name in dict.fromkeys(names) if name not in excluded]
+    return locals_, globals_, nonlocals
 
 
 def parameter_names(parameters: Node) -> List[str]:
@@ -230,16 +235,25 @@ class _Collector:
     sub-walks it needs, either a node to visit or another generator, and `run`
     drives them with an explicit stack. A sub-walk finishes before its handler
     resumes, so the order of definitions and uses is the same as a recursive walk.
+
+    Uses are also direct uses while the walk is outside every node in `calls`.
     """
 
     def __init__(
         self,
         uses_cache: Optional[Dict[int, List[str]]] = None,
         strong_only: bool = False,
+        calls: AbstractSet[int] = frozenset(),
     ) -> None:
         self.bindings = Bindings()
         self.uses_cache = uses_cache
         self.strong_only = strong_only
+        self.calls = calls
+        self.call_depth = 0
+        self.declared: Dict[str, List[str]] = {
+            "global_statement": [],
+            "nonlocal_statement": [],
+        }
 
     def run(self, *tasks: Task) -> None:
         stack: List[Iterator[Task]] = [iter(tasks)]
@@ -259,8 +273,12 @@ class _Collector:
             self.bindings.definitions.append(name)
 
     def use(self, name: str, local: frozenset[str]) -> None:
-        if name not in local and name not in self.bindings.uses:
+        if name in local:
+            return
+        if name not in self.bindings.uses:
             self.bindings.uses.append(name)
+        if not self.call_depth and name not in self.bindings.direct_uses:
+            self.bindings.direct_uses.append(name)
 
     def visit(self, node: Node, local: frozenset[str]) -> Optional[Iterator[Task]]:
         if self.uses_cache is not None:
@@ -269,6 +287,18 @@ class _Collector:
                 for name in known:
                     self.use(name, local)
                 return None
+        if node.id in self.calls:
+            return self.inside_call(node, local)
+        return self.dispatch(node, local)
+
+    def inside_call(self, node: Node, local: frozenset[str]) -> Iterator[Task]:
+        self.call_depth += 1
+        walk = self.dispatch(node, local)
+        if walk is not None:
+            yield walk
+        self.call_depth -= 1
+
+    def dispatch(self, node: Node, local: frozenset[str]) -> Optional[Iterator[Task]]:
         handler = getattr(self, f"_visit_{node.type}", None)
         if handler is not None:
             return handler(node, local)
@@ -460,7 +490,9 @@ class _Collector:
     _visit_import_from_statement = _visit_import_statement
 
     def _visit_global_statement(self, node: Node, local: frozenset[str]) -> None:
-        return None
+        self.declared[node.type].extend(
+            get_source_text(c) for c in node.named_children if c.type == "identifier"
+        )
 
     _visit_nonlocal_statement = _visit_global_statement
 

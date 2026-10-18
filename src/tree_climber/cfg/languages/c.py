@@ -8,7 +8,6 @@ from typing import Iterator, List, Optional, Tuple
 from tree_sitter import Node
 
 from tree_climber.ast_utils import (
-    dfs,
     get_child_by_field_name,
     get_required_child_by_field_name,
     get_required_child_by_type,
@@ -16,9 +15,9 @@ from tree_climber.ast_utils import (
 )
 from tree_climber.cfg.call_sites import (
     CallRegions,
+    Occurrences,
     link_call_flows,
     preorder,
-    uses_outside_calls,
     with_span,
 )
 from tree_climber.cfg.cfg_types import (
@@ -29,7 +28,7 @@ from tree_climber.cfg.cfg_types import (
     NodeType,
     ParameterInfo,
 )
-from tree_climber.cfg.visitor import CFGVisitor
+from tree_climber.cfg.visitor import CFGVisitor, NodeFacts
 
 
 class CCFGVisitor(CFGVisitor):
@@ -112,10 +111,11 @@ class CCFGVisitor(CFGVisitor):
     def get_call_sites(self, ast_node: Node) -> List[CallSite]:
         """Describe every call under an AST node. Only a plain `name(...)` call has
         a callee name; `(*fp)(x)` and `s->cb(x)` are sites without one."""
+        return self._call_sites(self._occurrences(ast_node))
+
+    def _call_sites(self, found: Occurrences) -> List[CallSite]:
         pairs: List[Tuple[CallSite, Node]] = []
-        for call in preorder(ast_node):
-            if call.type != "call_expression":
-                continue
+        for call in found.calls:
             function = call.child_by_field_name("function")
             receiver = self._receiver(call)
             site = CallSite(
@@ -127,13 +127,13 @@ class CCFGVisitor(CFGVisitor):
                 arguments=[
                     CallArgument(
                         text=get_source_text(a),
-                        uses=self.get_uses(a),
-                        direct_uses=self.get_direct_uses(a),
+                        uses=found.uses(a),
+                        direct_uses=found.direct_uses(a),
                     )
                     for a in self._argument_nodes(call)
                 ],
                 assigned_to=self._assigned_names(call),
-                receiver_uses=self.get_direct_uses(receiver) if receiver else None,
+                receiver_uses=found.direct_uses(receiver) if receiver else None,
             )
             pairs.append((with_span(site, call), call))
         link_call_flows(
@@ -144,6 +144,15 @@ class CCFGVisitor(CFGVisitor):
             frozenset(),
         )
         return [site for site, _ in pairs]
+
+    def node_facts(self, ast_node: Node) -> NodeFacts:
+        found = self._occurrences(ast_node)
+        return NodeFacts(
+            call_sites=self._call_sites(found),
+            definitions=found.definitions,
+            uses=found.uses(ast_node),
+            direct_uses=found.direct_uses(ast_node),
+        )
 
     DECLARATOR_WRAPPERS = (
         "pointer_declarator",
@@ -214,65 +223,80 @@ class CCFGVisitor(CFGVisitor):
 
     def get_definitions(self, ast_node: Node) -> List[str]:
         """Extract variable definitions under an AST node."""
-
-        def process_definition(node: Node) -> Optional[str]:
-            if node.type == "init_declarator":
-                name = self._declared_identifier(node.child_by_field_name("declarator"))
-                return get_source_text(name) if name else None
-            elif node.type == "assignment_expression":
-                return self._written_variable(node.child_by_field_name("left"))
-            elif node.type == "update_expression":
-                # Handle increment/decrement operators like a++, ++a, a--, --a
-                return self._written_variable(node.child_by_field_name("argument"))
-            return None
-
-        return dfs(ast_node, process_definition)
+        return self._occurrences(ast_node).definitions
 
     CALLS = frozenset({"call_expression"})
 
     def get_direct_uses(self, ast_node: Node) -> List[str]:
         """Variable uses under an AST node outside any call."""
-        return uses_outside_calls(ast_node, self.get_uses, self.CALLS)
+        return self._occurrences(ast_node).direct_uses(ast_node)
 
     def get_uses(self, ast_node: Node) -> List[str]:
         """Extract variable uses under an AST node."""
+        return self._occurrences(ast_node).uses(ast_node)
 
-        def process_use(node: Node) -> Optional[str]:
-            if node.type == "identifier":
-                if self._is_declared_name(node):
+    USE_TYPES = frozenset({"identifier"})
+    DEFINITION_TYPES = frozenset(
+        {"init_declarator", "assignment_expression", "update_expression"}
+    )
+
+    def _occurrences(self, ast_node: Node) -> Occurrences:
+        return Occurrences(
+            ast_node,
+            self._use_of,
+            self._definition_of,
+            self.CALLS,
+            self.USE_TYPES,
+            self.DEFINITION_TYPES,
+        )
+
+    def _definition_of(self, node: Node) -> Optional[str]:
+        """The variable a node defines, if any."""
+        if node.type == "init_declarator":
+            name = self._declared_identifier(node.child_by_field_name("declarator"))
+            return get_source_text(name) if name else None
+        elif node.type == "assignment_expression":
+            return self._written_variable(node.child_by_field_name("left"))
+        elif node.type == "update_expression":
+            # Handle increment/decrement operators like a++, ++a, a--, --a
+            return self._written_variable(node.child_by_field_name("argument"))
+        return None
+
+    def _use_of(self, node: Node) -> Optional[str]:
+        """The variable a node uses, if any."""
+        if node.type == "identifier":
+            if self._is_declared_name(node):
+                return None
+            # Skip identifiers in assignment left-hand side or function definition
+            if node.parent:
+                # Skip identifiers in various contexts where they're not "uses"
+                if node.parent.type in [
+                    "call_expression",  # Function names in calls
+                    "function_definition",  # Function names in definitions
+                    "parameter_declaration",  # Parameter declarations
+                    "function_declarator",  # Function declarations
+                ]:
                     return None
-                # Skip identifiers in assignment left-hand side or function definition
-                if node.parent:
-                    # Skip identifiers in various contexts where they're not "uses"
-                    if node.parent.type in [
-                        "call_expression",  # Function names in calls
-                        "function_definition",  # Function names in definitions
-                        "parameter_declaration",  # Parameter declarations
-                        "function_declarator",  # Function declarations
-                    ]:
+                if node.parent.type == "init_declarator":
+                    # Only the declared name is skipped; the initializer is a use
+                    if node == node.parent.child_by_field_name("declarator"):
                         return None
-                    if node.parent.type == "init_declarator":
-                        # Only the declared name is skipped; the initializer is a use
-                        if node == node.parent.child_by_field_name("declarator"):
-                            return None
-                    if node.parent.type == "assignment_expression":
-                        is_target = node == node.parent.child_by_field_name("left")
-                        is_compound = node.parent.children[1].type in (
-                            "-=",
-                            "+=",
-                            "*=",
-                            "/=",
-                        )
-                        if is_target and not is_compound:
-                            # A plain assignment target is a definition, not a use
-                            return None
-                    if node.parent.type == "update_expression":
-                        # Increment/decrement operations are both uses and definitions
-                        return node.text.decode()
-                return node.text.decode()
-            return None
-
-        return dfs(ast_node, process_use)
+                if node.parent.type == "assignment_expression":
+                    is_target = node == node.parent.child_by_field_name("left")
+                    is_compound = node.parent.children[1].type in (
+                        "-=",
+                        "+=",
+                        "*=",
+                        "/=",
+                    )
+                    if is_target and not is_compound:
+                        # A plain assignment target is a definition, not a use
+                        return None
+                if node.parent.type == "update_expression":
+                    # Increment/decrement operations are both uses and definitions
+                    return node.text.decode()
+            return node.text.decode()
+        return None
 
     def is_linear_statement(self, node: Node) -> bool:
         """Check if a node represents a simple linear statement"""

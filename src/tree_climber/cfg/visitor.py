@@ -1,5 +1,6 @@
 import abc
 import re
+from dataclasses import dataclass
 from typing import Any, Dict, FrozenSet, List, Optional
 
 from tree_sitter import Node
@@ -14,6 +15,16 @@ from tree_climber.cfg.cfg_types import (
     CFGTraversalResult,
     NodeType,
 )
+
+
+@dataclass
+class NodeFacts:
+    """The calls, definitions and uses under one AST node."""
+
+    call_sites: List[CallSite]
+    definitions: List[str]
+    uses: List[str]
+    direct_uses: Optional[List[str]]
 
 
 class ControlFlowContext:
@@ -217,6 +228,17 @@ class CFGVisitor(abc.ABC):
         """The uses under an AST node outside any call, or None if not known."""
         return None
 
+    def node_facts(self, ast_node: Node) -> NodeFacts:
+        """Everything `get_call_sites`, `get_definitions`, `get_uses` and
+        `get_direct_uses` return for an AST node. A language overrides it to
+        collect them in fewer walks of the subtree."""
+        return NodeFacts(
+            call_sites=self.get_call_sites(ast_node),
+            definitions=self.get_definitions(ast_node),
+            uses=self.get_uses(ast_node),
+            direct_uses=self.get_direct_uses(ast_node),
+        )
+
     def create_node(self, *args, **kwargs) -> int:
         """Create a new CFG node and return its ID"""
         node_id = self.cfg.create_node(*args, **kwargs)
@@ -224,17 +246,19 @@ class CFGVisitor(abc.ABC):
 
         # Link extra node metadata
         if node.ast_node is not None:
-            call_sites = self.get_call_sites(node.ast_node)
-            definitions = self.get_definitions(node.ast_node)
-            for name in self._mutated_receivers(call_sites):
+            facts = self.node_facts(node.ast_node)
+            definitions = facts.definitions
+            for name in self._mutated_receivers(facts.call_sites):
                 if name not in definitions:
                     definitions.append(name)
             node.metadata = CFGNodeMetadata(
-                function_calls=[s.callee for s in call_sites if s.callee is not None],
+                function_calls=[
+                    s.callee for s in facts.call_sites if s.callee is not None
+                ],
                 variable_definitions=definitions,
-                variable_uses=self.get_uses(node.ast_node),
-                call_sites=call_sites,
-                direct_uses=self.get_direct_uses(node.ast_node),
+                variable_uses=facts.uses,
+                call_sites=facts.call_sites,
+                direct_uses=facts.direct_uses,
             )
 
         return node_id
@@ -325,9 +349,10 @@ class CFGVisitor(abc.ABC):
             NodeType.DEFAULT,
         }
         special_nodes = []
+        function_ends = set(self.cfg.entry_node_ids) | set(self.cfg.exit_node_ids)
         for node_id, node in self.cfg.nodes.items():
             # Skip the overall function entry/exit nodes
-            if node_id in self.cfg.entry_node_ids or node_id in self.cfg.exit_node_ids:
+            if node_id in function_ends:
                 continue
 
             if node.node_type in passthrough_types:

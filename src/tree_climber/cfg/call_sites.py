@@ -1,8 +1,9 @@
 """Helpers shared by the language visitors that build `CallSite`s."""
 
+from bisect import bisect_left
 from collections import Counter
 from dataclasses import dataclass, field
-from typing import Callable, Dict, FrozenSet, Iterator, List, Optional, Tuple
+from typing import Callable, Dict, FrozenSet, Iterator, List, Optional, Tuple, Union
 
 from tree_sitter import Node
 
@@ -73,26 +74,80 @@ def _flow(node: Node, enclosing: int, regions: CallRegions) -> CallFlow:
     return CallFlow(call=enclosing, role="callee")
 
 
-def outermost(node: Node, types: FrozenSet[str]) -> Iterator[Node]:
-    """The nodes of the given types under `node` (itself included) that are not
-    inside another one."""
-    stack = [node]
-    while stack:
-        current = stack.pop()
-        if current.type in types:
-            yield current
-        else:
-            stack.extend(reversed(current.children))
+class Occurrences:
+    """The uses, definitions and calls under a node, from one walk of its subtree.
 
+    `use_of` and `definition_of` name the variable a node uses or defines, or
+    return None; they may look at the node's ancestors but not at the walk's
+    root, so the occurrences under any node inside the subtree are a slice of the
+    walk's. Each use remembers the nearest call around it, which tells whether
+    it is outside every call of a smaller subtree.
+    """
 
-def uses_outside_calls(
-    node: Node, uses: Callable[[Node], List[str]], calls: FrozenSet[str]
-) -> List[str]:
-    """The uses under `node` that are not inside a call, for a `uses` function
-    that lists every occurrence: all the uses, minus those of the outermost
-    calls."""
-    names = uses(node)
-    counts = Counter(names)
-    for call in outermost(node, calls):
-        counts.subtract(uses(call))
-    return [name for name in dict.fromkeys(names) if counts[name] > 0]
+    def __init__(
+        self,
+        root: Node,
+        use_of: Callable[[Node], Optional[str]],
+        definition_of: Callable[[Node], Optional[str]],
+        calls: FrozenSet[str],
+        use_types: FrozenSet[str],
+        definition_types: FrozenSet[str],
+    ) -> None:
+        """`use_of` is only asked about nodes of `use_types`, `definition_of`
+        about nodes of `definition_types`."""
+        self.calls: List[Node] = []
+        self.definitions: List[str] = []
+        self._spans: Dict[int, Tuple[int, int]] = {}
+        self._use_at: List[int] = []
+        self._use_name: List[str] = []
+        self._use_call: List[int] = []
+
+        index = 0
+        stack: List[Union[Tuple[Node, int], Node]] = [(root, -1)]
+        while stack:
+            item = stack.pop()
+            if not isinstance(item, tuple):
+                self._spans[item.id] = (self._spans[item.id][0], index)
+                continue
+            node, call = item
+            kind = node.type
+            if kind in use_types:
+                used = use_of(node)
+                if used is not None:
+                    self._use_at.append(index)
+                    self._use_name.append(used)
+                    self._use_call.append(call)
+            if kind in definition_types:
+                defined = definition_of(node)
+                if defined is not None:
+                    self.definitions.append(defined)
+            if kind in calls:
+                self.calls.append(node)
+                call = index
+            self._spans[node.id] = (index, index + 1)
+            index += 1
+            children = node.children
+            if children:
+                stack.append(node)
+                stack.extend((child, call) for child in reversed(children))
+
+    def _range(self, node: Node) -> Tuple[int, int, int]:
+        start, end = self._spans[node.id]
+        return start, bisect_left(self._use_at, start), bisect_left(self._use_at, end)
+
+    def uses(self, node: Node) -> List[str]:
+        """Every use under `node`, in source order, repeats included."""
+        _, first, last = self._range(node)
+        return self._use_name[first:last]
+
+    def direct_uses(self, node: Node) -> List[str]:
+        """The uses under `node` outside every call in it (`node` included),
+        de-duplicated, in the order the names are first used anywhere under it."""
+        start, first, last = self._range(node)
+        names = self._use_name[first:last]
+        outside = Counter(
+            name
+            for name, call in zip(names, self._use_call[first:last])
+            if call < start
+        )
+        return [name for name in dict.fromkeys(names) if outside[name] > 0]
