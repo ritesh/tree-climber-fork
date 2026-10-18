@@ -52,6 +52,25 @@ class TestMatching:
         assert wild is not None and wild.search("request.form")
         assert not wild.search("request")
 
+    def test_attribute_patterns_are_compiled_once(self):
+        first = Source(attribute="request.args").attribute_pattern()
+
+        assert Source(attribute="request.args").attribute_pattern() is first
+        assert Source(attribute="request.form").attribute_pattern() is not first
+
+    @pytest.mark.parametrize(
+        "attribute, literal",
+        [
+            ("request.args", "request"),
+            ("sys.argv", "argv"),
+            ("*.args", "args"),
+            ("request.*", "request"),
+            ("*.*", ""),
+        ],
+    )
+    def test_the_attribute_literal_is_its_longest_named_part(self, attribute, literal):
+        assert Source(attribute=attribute).attribute_literal() == literal
+
     def test_sinks_watch_positions_and_keywords(self):
         call = site(
             "execute",

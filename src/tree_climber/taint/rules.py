@@ -10,12 +10,21 @@ import json
 import re
 from dataclasses import dataclass, field
 from fnmatch import fnmatchcase
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Union
 
 from tree_climber.cfg.cfg_types import CallSite
 
 Position = Union[int, str]
+
+
+@lru_cache(maxsize=None)
+def _attribute_pattern(attribute: str) -> re.Pattern:
+    body = r"\.".join(
+        r"\w+" if part == "*" else re.escape(part) for part in attribute.split(".")
+    )
+    return re.compile(rf"(?<![\w.]){body}(?!\w)")
 
 
 def call_matches(pattern: str, site: CallSite) -> bool:
@@ -42,11 +51,13 @@ class Source:
     def attribute_pattern(self) -> Optional[re.Pattern]:
         if self.attribute is None:
             return None
-        body = r"\.".join(
-            r"\w+" if part == "*" else re.escape(part)
-            for part in self.attribute.split(".")
-        )
-        return re.compile(rf"(?<![\w.]){body}(?!\w)")
+        return _attribute_pattern(self.attribute)
+
+    def attribute_literal(self) -> str:
+        """The longest part of the attribute that is not `*`: text that every
+        match contains, to rule out most nodes before the regex runs."""
+        parts = (self.attribute or "").split(".")
+        return max((part for part in parts if part != "*"), key=len, default="")
 
     def to_dict(self) -> Dict[str, Any]:
         if self.call is not None:

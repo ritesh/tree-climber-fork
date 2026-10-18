@@ -9,6 +9,7 @@ import pytest
 
 from tree_climber.cfg.builder import CFGBuilder
 from tree_climber.query import CodeGraph
+from tree_climber.taint.engine import _origins, _Program
 from tree_climber.taint import (
     Rule,
     Sanitizer,
@@ -319,6 +320,95 @@ class TestOrigins:
         assert [" -> ".join(f.path.texts) for f in found] == [
             "b = escape(a) + input() -> system(b)"
         ]
+
+    @staticmethod
+    def program(code, language="python"):
+        builder = CFGBuilder(language)
+        builder.setup_parser()
+        return _Program(CodeGraph(builder.build_cfg(code)))
+
+    def test_rules_sharing_sources_find_them_once(self, monkeypatch):
+        sources = [Source(call="input"), Source(attribute="sys.argv")]
+        rules = [
+            Rule("shell", sources=sources, sinks=[Sink(call="system")]),
+            Rule("eval", sources=sources, sinks=[Sink(call="eval")]),
+        ]
+        found = []
+        find = _Program._find_origins
+
+        def counted(self, source):
+            found.append(source)
+            return find(self, source)
+
+        monkeypatch.setattr(_Program, "_find_origins", counted)
+        code = "a = input()\nb = sys.argv[1]\nsystem(a)\neval(b)\n"
+
+        findings = analyze_source("python", code, rules)
+
+        assert sorted(found, key=repr) == sorted(sources, key=repr)
+        assert [(f.rule, " -> ".join(f.path.texts)) for f in findings] == [
+            ("eval", "b = sys.argv[1] -> eval(b)"),
+            ("shell", "a = input() -> system(a)"),
+        ]
+
+    def test_origins_follow_the_rule_sources_then_the_nodes(self):
+        program = self.program("a = second()\nb = first()\nc = second()\n")
+        first, second = Source(call="first"), Source(call="second")
+        rule = Rule("r", sources=[second, first], sinks=[Sink(call="system")])
+
+        origins = [
+            (program.cfg.nodes[o.node].source_text, o.source)
+            for o in _origins(program, rule)
+        ]
+
+        assert origins == [
+            ("a = second()", second),
+            ("c = second()", second),
+            ("b = first()", first),
+        ]
+
+    def test_a_call_pattern_matches_every_callee_once_per_node(self):
+        program = self.program(
+            'x = os.getenv("A") + os.getenv("B")\ny = env.getenv("C")\nz = getenvx()\n'
+        )
+
+        origins = program.origins(Source(call="*getenv"))
+
+        assert [program.cfg.nodes[o.node].source_text for o in origins] == [
+            'x = os.getenv("A") + os.getenv("B")',
+            'y = env.getenv("C")',
+        ]
+
+    def test_call_origins_are_in_node_order(self):
+        lines = [f"a{i} = {'f()' if i in (3, 9) else '0'}" for i in range(12)]
+        program = self.program("\n".join(lines) + "\n")
+
+        origins = program.origins(Source(call="f"))
+
+        assert [program.cfg.nodes[o.node].source_text for o in origins] == [
+            "a3 = f()",
+            "a9 = f()",
+        ]
+        assert [o.node for o in origins] != list({o.node for o in origins})
+
+    def test_an_attribute_needs_more_than_its_literal(self):
+        program = self.program(
+            "a = request.args\nb = myrequest.args\nc = request.argsx\n"
+            'd = "request.args"\ne = args.request\n'
+        )
+
+        origins = program.origins(Source(attribute="request.args"))
+
+        assert [program.cfg.nodes[o.node].source_text for o in origins] == [
+            "a = request.args"
+        ]
+
+    def test_an_attribute_of_only_wildcards_checks_every_node(self):
+        program = self.program("a = 1\nb = x.y\nc = f(1)\n")
+
+        origins = program.origins(Source(attribute="*.*"))
+
+        assert [program.cfg.nodes[o.node].source_text for o in origins] == ["b = x.y"]
 
 
 class TestAcrossCalls:

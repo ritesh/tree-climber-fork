@@ -90,7 +90,11 @@ class _Program:
         self.cfg = cfg
         self.field_sensitive = field_sensitive
         self._code: Dict[int, bytes] = {}
+        self._text: Dict[int, str] = {}
         self._accesses: Dict[int, Accesses] = {}
+        self._origins: Dict[Source, List[_Origin]] = {}
+        self._callers: Optional[Dict[str, List[int]]] = None
+        self._raw: Optional[List[Tuple[CFGNode, bytes]]] = None
         self.governed: Dict[int, List[int]] = {}
         self.cases: Dict[int, List[int]] = {}
         if implicit_flows:
@@ -147,6 +151,57 @@ class _Program:
         if node.id not in self._code:
             self._code[node.id] = code_only(node.ast_node) if node.ast_node else b""
         return self._code[node.id]
+
+    def text(self, node: CFGNode) -> str:
+        """`code` decoded, computed once."""
+        if node.id not in self._text:
+            self._text[node.id] = self.code(node).decode("utf-8", errors="replace")
+        return self._text[node.id]
+
+    def origins(self, source: Source) -> List[_Origin]:
+        """Where the source occurs, in node order, found once however many
+        rules share the source."""
+        if source not in self._origins:
+            self._origins[source] = self._find_origins(source)
+        return self._origins[source]
+
+    def _find_origins(self, source: Source) -> List[_Origin]:
+        cfg = self.cfg
+        if source.call is not None:
+            if self._callers is None:
+                self._callers = {}
+                for node_id, node in cfg.nodes.items():
+                    for site in node.metadata.call_sites:
+                        self._callers.setdefault(site.callee_text, []).append(node_id)
+            pattern = source.call
+            nodes = {
+                node_id
+                for callee, callers in self._callers.items()
+                if fnmatchcase(callee, pattern)
+                for node_id in callers
+            }
+            return [_Origin(node_id, source) for node_id in sorted(nodes)]
+        if source.attribute is not None:
+            pattern = source.attribute_pattern()
+            assert pattern is not None
+            if self._raw is None:
+                self._raw = [
+                    (cfg.nodes[node_id], text)
+                    for node_id in sorted(cfg.nodes)
+                    if (ast := cfg.nodes[node_id].ast_node) is not None
+                    and (text := ast.text) is not None
+                ]
+            literal = source.attribute_literal().encode()
+            return [
+                _Origin(node.id, source)
+                for node, raw in self._raw
+                if literal in raw and pattern.search(self.text(node))
+            ]
+        return [
+            _Origin(entry, source, name)
+            for entry in cfg.entry_node_ids
+            for name in _matching_parameters(cfg.nodes[entry], source)
+        ]
 
     def attribute_regions(self, node: CFGNode, source: Source) -> Set[Region]:
         """Where in the node the attribute occurs outside any nested call: the
@@ -523,26 +578,7 @@ def _match_cases(cfg: CFG) -> Dict[int, List[int]]:
 
 
 def _origins(program: _Program, rule: Rule) -> List[_Origin]:
-    cfg = program.cfg
-    origins: List[_Origin] = []
-    for source in rule.sources:
-        if source.call is not None:
-            for node_id in sorted(cfg.nodes):
-                sites = cfg.nodes[node_id].metadata.call_sites
-                if any(call_matches(source.call, site) for site in sites):
-                    origins.append(_Origin(node_id, source))
-        elif source.attribute is not None:
-            pattern = source.attribute_pattern()
-            assert pattern is not None
-            for node_id in sorted(cfg.nodes):
-                code = program.code(cfg.nodes[node_id])
-                if pattern.search(code.decode("utf-8", errors="replace")):
-                    origins.append(_Origin(node_id, source))
-        else:
-            for entry in cfg.entry_node_ids:
-                for name in _matching_parameters(cfg.nodes[entry], source):
-                    origins.append(_Origin(entry, source, name))
-    return origins
+    return [origin for source in rule.sources for origin in program.origins(source)]
 
 
 def _matching_parameters(entry: CFGNode, source: Source) -> List[str]:
