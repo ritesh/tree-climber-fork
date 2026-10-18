@@ -9,7 +9,7 @@ import pytest
 
 from tree_climber.cfg.builder import CFGBuilder
 from tree_climber.query import CodeGraph
-from tree_climber.taint.engine import _origins, _Program
+from tree_climber.taint.engine import _origins, _Program, _Run
 from tree_climber.taint import (
     Rule,
     Sanitizer,
@@ -450,6 +450,81 @@ class TestAcrossCalls:
             "def f():\n    r = R(input())\n    r.run()\n"
         )
         assert flows(code) == ["r = R(input()) -> r.run() -> R.run -> system(self.c)"]
+
+
+class TestSinkReach:
+    SINK = [Sink(call="system")]
+
+    @staticmethod
+    def reach(code, implicit_flows=False):
+        builder = CFGBuilder("python")
+        builder.setup_parser()
+        program = _Program(
+            CodeGraph(builder.build_cfg(code)), implicit_flows=implicit_flows
+        )
+        rule = Rule("r", sources=[Source(call="input")], sinks=TestSinkReach.SINK)
+        return {program.cfg.nodes[n].source_text for n in program.reaching_sinks(rule)}
+
+    @pytest.mark.parametrize(
+        "code, origin",
+        [
+            ("system(input())\n", "system(input())"),
+            ("a = input()\nb = a\nsystem(b)\n", "a = input()"),
+            ("def f(x):\n    system(x)\n\n\nf(input())\n", "f(input())"),
+            (
+                "def f():\n    return input()\n\n\na = f()\nsystem(a)\n",
+                "return input()",
+            ),
+            (
+                "def outer():\n    a = input()\n\n    def inner():\n"
+                "        system(a)\n\n    inner()\n",
+                "a = input()",
+            ),
+        ],
+        ids=["the sink itself", "def-use", "argument", "return", "free variable"],
+    )
+    def test_every_flow_leads_back_to_the_origin(self, code, origin):
+        assert origin in self.reach(code)
+
+    def test_control_and_match_flows_with_implicit_flows(self):
+        branch = "a = input()\nif a:\n    b = 1\nelse:\n    b = 2\nsystem(b)\n"
+        match = (
+            "a = input()\nmatch a:\n    case 1:\n        b = 1\n"
+            "    case _:\n        b = 2\nsystem(b)\n"
+        )
+
+        assert "a = input()" not in self.reach(branch)
+        assert "a = input()" in self.reach(branch, implicit_flows=True)
+        assert "a = input()" not in self.reach(match)
+        assert "a = input()" in self.reach(match, implicit_flows=True)
+
+    def test_code_after_the_sink_or_beside_it_is_not_included(self):
+        reach = self.reach("a = input()\nsystem(a)\nb = input()\nc = b\n")
+
+        assert reach == {"a = input()", "system(a)"}
+
+    def test_only_origins_that_reach_their_rule_sink_are_run(self, monkeypatch):
+        rules = [
+            Rule("shell", sources=[Source(call="input")], sinks=[Sink(call="system")]),
+            Rule("eval", sources=[Source(call="input")], sinks=[Sink(call="eval")]),
+        ]
+        runs = []
+        start = _Run.__init__
+
+        def counted(self, program, rule, origin):
+            runs.append((rule.id, program.cfg.nodes[origin.node].source_text))
+            start(self, program, rule, origin)
+
+        monkeypatch.setattr(_Run, "__init__", counted)
+
+        found = analyze_source(
+            "python", "a = input()\nsystem(a)\nb = input()\nprint(b)\n", rules
+        )
+
+        assert runs == [("shell", "a = input()")]
+        assert [(f.rule, " -> ".join(f.path.texts)) for f in found] == [
+            ("shell", "a = input() -> system(a)")
+        ]
 
 
 class TestCAndJava:
