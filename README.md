@@ -19,21 +19,9 @@ Run `tree-climber --list-languages` to see what your install supports.
 
 ## Architecture
 
-### Core Components
+Tree Climber parses source code with tree-sitter and builds a control flow graph with one visitor per language. It then computes data flow: reaching definitions, def-use chains, flows between functions, and control dependence. On top of these, `CodeGraph` answers queries and the taint engine follows untrusted input. The CLI, the web API and the editor present the results.
 
-- **CFG Builder**: Generates control flow graphs using visitor pattern
-- **Dataflow Solver**: Implements iterative dataflow analysis algorithms
-- **AST Utils**: Tree-sitter integration and AST manipulation utilities
-- **Query**: `tree_climber.query` answers questions about the graphs (lookup, successors and paths, def-use, slices, networkx export) without hand-written traversals; see the [Python guide](./docs/python-guide.md#querying-the-graph)
-- **Taint analysis**: `tree_climber.taint` traces untrusted input from sources to sinks across calls, with call-site sanitizers, argument positions, JSON rules and example rule sets; see the [taint analysis guide](./docs/taint-guide.md) for worked examples in Python, C and Java, and the [Python guide](./docs/python-guide.md#taint-analysis) for the reference
-- **Visualization**: Web-based interactive CFG visualization
-
-### Analysis Capabilities
-
-- **Control Flow Analysis**: Statement-level CFG construction
-- **Def-Use Chains**: Variable definition and usage tracking
-- **Reaching Definitions**: Forward dataflow propagation
-- **Extensible Framework**: Support for custom dataflow analyses
+[docs/architecture.md](./docs/architecture.md) explains it level by level. It covers the layers, one program followed through each of them, and the algorithms behind them.
 
 ## Installation
 
@@ -211,6 +199,7 @@ Each file runs in a worker process with a time limit (`--timeout`, `--jobs`), so
 
 ## Documentation
 
+- [Architecture](./docs/architecture.md): how the project is built, level by level, with the algorithms behind it
 - [Python guide](./docs/python-guide.md): what is modeled and how to exercise it
 - [Taint analysis guide](./docs/taint-guide.md): running taint analysis on Python, C and Java, with rules of your own
 - [Extending languages](./docs/plans/extending-languages.md): adding a language, and per-language limitations
