@@ -132,17 +132,17 @@ The FastAPI backend provides the following endpoints:
 
 ## Limitations
 
-- The analysis is intraprocedural; function calls are linked to functions of the same name in the same file.
-- Variable updates through fields, subscripts, and pointers are approximated, because the dataflow framework only supports strong updates.
-- Python: a nested function's reads of enclosing variables are not connected to their definitions. See the [Python guide](./docs/python-guide.md).
-- C and Java: see the [limitations section of the language extension guide](./docs/plans/extending-languages.md).
+- Calls are linked by name to functions in the same file. Data flows between functions through arguments, returns and free variables, but callers are not told apart: a function is analysed once for all of them.
+- A write through a field or subscript is a weak update: the root variable is both defined and used. C pointer writes and Java field and array writes are not tracked.
+- Python: free-variable flows connect closures and globals to their definitions, but they ignore order. See the [Python guide](./docs/python-guide.md).
+- C and Java: see the [limitations section of the language extension guide](./docs/plans/extending-languages.md#current-implementation-limitations).
 
 ## Development
 
 ### Adding New Languages
 
 1. Create a new visitor class in `src/tree_climber/cfg/languages/`
-2. Implement language-specific CFG construction logic
+2. Implement language-specific CFG construction logic (see the [language extension guide](./docs/plans/extending-languages.md))
 3. Register the language in `src/tree_climber/language_registry.py` (name, display name, file extensions, visitor path). The CLI, web API, and CFG builder all read from it.
 4. Add the language to the list in `src/tree_climber/viz/frontend/src/LanguageSelector.tsx` so it appears in the web UI, and a sample program for it to `src/sampleCode.ts` (each language keeps its own editor buffer, starting from its sample)
 5. Add test cases in the `test/` directory
