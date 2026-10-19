@@ -397,7 +397,7 @@ The analysis is approximate in both directions. What it misses, and what to do a
 - **Values that cross files.** Each file is analysed alone: a helper imported from another module, or a view registered elsewhere, is not followed. Make the boundary a source or a sink: a `parameter` source on the view functions, or a sink on the helper call.
 - **Output parameters.** C's `fgets(buf, ...)`, `snprintf(cmd, ...)` and similar calls do not taint the buffer they write (as in `logger.c` above). To catch these, you can make the formatting call a sink itself, for example `{"call": "snprintf", "arguments": [3, 4, 5]}` in a rule of your own, at the cost of reports where the buffer is never used dangerously.
 - **Aliasing, dynamic code and function pointers.** Two names for one object, `getattr`, `exec` of strings, and calls through function pointers are not followed.
-- **Java fields and arrays.** Writes into fields and array elements are not modeled, so taint stored in `this.x` or `a[i]` is lost.
+- **Java fields of `this`.** `this.x = v` defines no variable, so taint stored in a field of the current object is lost. Writes into the fields and elements of a named variable (`o.x = v`, `a[i] = v`) are weak updates of `o` and `a`, as in C and Python.
 - **Branches on tainted data**, unless `implicit_flows=True` (section 5).
 - **Callee text that does not match.** Patterns match the callee as written: `system(...)` after `from os import system` needs a `system` pattern, not `os.system`.
 

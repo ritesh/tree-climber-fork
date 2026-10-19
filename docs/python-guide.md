@@ -1041,7 +1041,7 @@ Without the option, both `system` calls are reported.
 
 Check, and what is approximate:
 - over-approximations: unknown calls pass taint through; a container or object is one value unless `field_sensitive` (`d["k"] = tainted` taints `d`, `self.x = tainted` taints `self`, `items.append(tainted)` taints `items`); closures and globals are flow-insensitive; calls are resolved by name, and a function is analysed once for all its callers: with `def wrap(a): return a`, `t = wrap(input())` makes every `wrap(...)` result tainted, so `system(wrap("safe"))` is reported too;
-- under-approximations: aliasing (two names for one object), output parameters (C's `fgets(buf, ...)` or `snprintf(cmd, ...)` do not taint `buf` or `cmd`), dynamic features (`getattr`, `exec` of strings), calls through function pointers, and branching on tainted data unless `implicit_flows`; Java writes into fields and arrays define nothing in the CFG (#32), so taint written there is lost with or without `field_sensitive`;
+- under-approximations: aliasing (two names for one object), output parameters (C's `fgets(buf, ...)` or `snprintf(cmd, ...)` do not taint `buf` or `cmd`), dynamic features (`getattr`, `exec` of strings), calls through function pointers, and branching on tainted data unless `implicit_flows`; Java writes through `this` (`this.x = v`) define nothing, so taint written there is lost with or without `field_sensitive`;
 - attribute sources are matched as text in the statement, outside string literals and comments.
 
 ### Tracing user input

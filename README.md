@@ -133,7 +133,7 @@ The FastAPI backend provides the following endpoints:
 ## Limitations
 
 - Calls are linked by name to functions in the same file. Data flows between functions through arguments, returns and free variables, but callers are not told apart: a function is analysed once for all of them.
-- A write through a field or subscript is a weak update: the root variable is both defined and used. C pointer writes and Java field and array writes are not tracked.
+- A write through a field or subscript is a weak update: the root variable is both defined and used. C pointer writes and Java writes through `this` are not tracked.
 - Python: free-variable flows connect closures and globals to their definitions, but they ignore order. See the [Python guide](./docs/python-guide.md).
 - C and Java: see the [limitations section of the language extension guide](./docs/plans/extending-languages.md#current-implementation-limitations).
 
