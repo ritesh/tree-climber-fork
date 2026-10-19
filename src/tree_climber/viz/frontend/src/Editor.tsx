@@ -1,7 +1,8 @@
 import React from "react";
 import * as monaco from "monaco-editor";
 import Editor from "@monaco-editor/react";
-import { useGraph, selectGraphNodeById, setOnGraphNodeSelectCallback } from './GraphContext';
+import { useGraph, selectGraphNodeById, setOnGraphNodeSelectCallback } from './graphState';
+import type { NodeAttributes } from './graphState';
 import type Graph from "graphology";
 import './Editor.css'
 import { loadCode, saveCode } from './sampleCode';
@@ -42,7 +43,7 @@ function positionEquals(start: Position, end: Position) {
  * Given a node's attributes and the editor instance, return the [startIdx, endIdx] for highlighting.
  * Returns null if no valid range is found.
  */
-function getNodeHighlightRange(nodeAttrs: any): [number, number] | null {
+function getNodeHighlightRange(nodeAttrs: NodeAttributes | undefined): [number, number] | null {
   // Try to use metadata if available
   if (nodeAttrs && typeof nodeAttrs.start_index === 'number' && typeof nodeAttrs.end_index === 'number') {
     return [nodeAttrs.start_index, nodeAttrs.end_index];
@@ -60,13 +61,13 @@ const MonacoEditor = ({ language, onTextChange }: { language: string, onTextChan
   // Use refs to store current graph state to avoid stale closures
   const graphRef = React.useRef(graphologyGraph);
   const getNodesInRangeRef = React.useRef(getNodesInRange);
-  const editorRef = React.useRef<any>(null);
-  const decorationsCollectionRef = React.useRef<any>(null);
+  const editorRef = React.useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
+  const decorationsCollectionRef = React.useRef<monaco.editor.IEditorDecorationsCollection | null>(null);
   const pathDecorationsRef = React.useRef<monaco.editor.IEditorDecorationsCollection | null>(null);
 
   React.useEffect(() => {
     pathDecorationsRef.current?.clear();
-    const editor: monaco.editor.IStandaloneCodeEditor | null = editorRef.current;
+    const editor = editorRef.current;
     const model = editor?.getModel();
     if (!editor || !model || !highlightedPath || !graphologyGraph) return;
     const decorations: monaco.editor.IModelDeltaDecoration[] = [];
@@ -134,7 +135,7 @@ const MonacoEditor = ({ language, onTextChange }: { language: string, onTextChan
     }
   };
 
-  const handleEditorMount = (editor: any) => {
+  const handleEditorMount = (editor: monaco.editor.IStandaloneCodeEditor) => {
     setCode(editor.getValue());
     editorRef.current = editor;
     // Log cursor position and analyze AST/CFG nodes
@@ -161,6 +162,7 @@ const MonacoEditor = ({ language, onTextChange }: { language: string, onTextChan
     // Log selection changes
     editor.onDidChangeCursorSelection((e: monaco.editor.ICursorSelectionChangedEvent) => {
       const model = editor.getModel();
+      if (!model) return;
       const selection = e.selection;
 
       const start = getPositionWithIndex(editor, selection.getStartPosition());
@@ -217,7 +219,11 @@ const MonacoEditor = ({ language, onTextChange }: { language: string, onTextChan
 
 export default MonacoEditor;
 
-function highlightRange(range: [number, number] | null, editor: any, decorationsCollectionRef: React.RefObject<any>) {
+function highlightRange(
+  range: [number, number] | null,
+  editor: monaco.editor.IStandaloneCodeEditor,
+  decorationsCollectionRef: React.RefObject<monaco.editor.IEditorDecorationsCollection | null>,
+) {
   if (range) {
     const [startIdx, endIdx] = range;
     const model = editor.getModel();
