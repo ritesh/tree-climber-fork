@@ -91,11 +91,10 @@ class JavaCFGVisitor(CFGVisitor):
             if c.type not in ("line_comment", "block_comment")
         ]
 
-    @staticmethod
-    def _assigned_names(call: Node) -> List[str]:
+    def _assigned_names(self, call: Node) -> List[str]:
         """Variables that receive the call's result when the call is the whole
-        right-hand side: `T x = f();`, `x = f();`, `a = b = f();`, through
-        parentheses and casts. Only plain names, like `get_definitions`."""
+        right-hand side: `T x = f();`, `x = f();`, `a = b = f();`, `a[i] = f();`,
+        through parentheses and casts."""
         names: List[str] = []
         node = call
         while node.parent is not None:
@@ -113,8 +112,9 @@ class JavaCFGVisitor(CFGVisitor):
                 left = parent.child_by_field_name("left")
                 if right is None or right.id != node.id:
                     break
-                if left is not None and left.type == "identifier":
-                    names.insert(0, get_source_text(left))
+                written = self._written_variable(left)
+                if written is not None:
+                    names.insert(0, written)
             else:
                 break
             node = parent
@@ -174,6 +174,26 @@ class JavaCFGVisitor(CFGVisitor):
         """Extract variable definitions under an AST node."""
         return self._occurrences(ast_node).definitions
 
+    @staticmethod
+    def _written_variable(target: Optional[Node]) -> Optional[str]:
+        """The variable an assignment target writes to.
+
+        A name, `o.f`, and `a[i]` write to the root variable (the last two are
+        weak updates: the variable is also used). A target whose root is not a
+        name, such as `this.f` or `get().f`, writes no variable.
+        """
+        node = target
+        while node is not None:
+            if node.type == "identifier":
+                return get_source_text(node)
+            if node.type == "array_access":
+                node = node.child_by_field_name("array")
+            elif node.type == "field_access":
+                node = node.child_by_field_name("object")
+            else:
+                return None
+        return None
+
     CALLS = frozenset({"method_invocation"})
 
     def get_direct_uses(self, ast_node: Node) -> List[str]:
@@ -218,15 +238,9 @@ class JavaCFGVisitor(CFGVisitor):
                 if child.type == "identifier":
                     return get_source_text(child)
         elif node.type == "update_expression":
-            # Look for identifier in declarator
-            for child in node.children:
-                if child.type == "identifier":
-                    return get_source_text(child)
+            return self._written_variable(next(iter(node.named_children), None))
         elif node.type == "assignment_expression":
-            # Find the left side identifier
-            left = node.children[0] if node.children else None
-            if left and left.type == "identifier":
-                return get_source_text(left)
+            return self._written_variable(node.child_by_field_name("left"))
         return None
 
     def _use_of(self, node: Node) -> Optional[str]:

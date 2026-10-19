@@ -630,6 +630,9 @@ class TestJava:
             ("a = b = f();", ["a", "b"]),
             ("x = (int) f();", ["x"]),
             ("x = (f());", ["x"]),
+            ("a[0] = f();", ["a"]),
+            ("o.f = f();", ["o"]),
+            ("this.f = f();", []),
         ],
     )
     def test_assigned_to(self, statement, names):

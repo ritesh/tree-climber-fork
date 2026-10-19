@@ -1,7 +1,8 @@
 /*
  * Command injection with the built-in Java rules (`*.exec`), and the
- * documented Java approximations: writes into fields and array elements
- * define nothing (#32), a call to a mutating method (`append`, `add`, `put`...)
+ * documented Java approximations: a write into an element or a field of a
+ * named variable is a weak update of it (#32), a write through `this` defines
+ * nothing, a call to a mutating method (`append`, `add`, `put`...)
  * taints its receiver, and unknown calls pass taint through.
  */
 import java.io.IOException;
@@ -22,14 +23,14 @@ public class Command {
 
     void field(HttpServletRequest request) throws IOException {
         this.pending = request.getParameter("cmd");
-        // todoruleid: java-command-injection -- Java writes into fields define nothing in the CFG (#32)
+        // todoruleid: java-command-injection -- a write through `this` defines no variable, so the field read finds no taint
         Runtime.getRuntime().exec(this.pending);
     }
 
     void array(HttpServletRequest request) throws IOException {
         String[] argv = new String[2];
         argv[0] = request.getParameter("cmd");
-        // todoruleid: java-command-injection -- Java writes into array elements define nothing in the CFG (#32)
+        // ruleid: java-command-injection
         Runtime.getRuntime().exec(argv);
     }
 

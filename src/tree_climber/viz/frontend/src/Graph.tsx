@@ -5,13 +5,13 @@ import tippy from 'tippy.js';
 import dagre from 'cytoscape-dagre';
 import nodeHtmlLabel from 'cytoscape-node-html-label';
 import { useState, useRef, useEffect, forwardRef, useImperativeHandle } from 'react';
-import { useGraph, setSelectGraphNodeCallback, notifyGraphNodeSelected } from './GraphContext';
-import type { GraphData, CFGData, DFGEdge, DFGData, Finding } from './GraphContext';
+import { useGraph, setSelectGraphNodeCallback, notifyGraphNodeSelected } from './graphState';
+import type { GraphData, CFGData, DFGEdge, DFGData, Finding } from './graphState';
 import './Graph.css';
 import 'tippy.js/dist/tippy.css';
 
 // Register popper with tippy factory
-function tippyFactory(ref: any, content: string) {
+function tippyFactory(ref: Pick<Element, 'getBoundingClientRect'>, content: string) {
   const dummyDomEle = document.createElement('div');
   const tip = tippy(dummyDomEle, {
     getReferenceClientRect: ref.getBoundingClientRect,
@@ -180,7 +180,7 @@ const convertCFGToElements = (cfgData: CFGData) => {
     const definitions = (node.metadata?.variable_definitions || []).join(', ');
     const uses = (node.metadata?.variable_uses || []).join(', ');
     const functionCalls = (node.metadata?.function_calls || []).join(', ');
-    let sourceText = node.source_text || '';
+    const sourceText = node.source_text || '';
     return {
       data: {
         id: node.id.toString(),
@@ -195,7 +195,7 @@ const convertCFGToElements = (cfgData: CFGData) => {
     };
   });
 
-  const edges: any[] = [];
+  const edges: cytoscape.ElementDefinition[] = [];
   Object.values(cfgData.nodes).forEach(node => {
     node.successors.forEach(successorId => {
       const label = node.edge_labels[successorId] || '';
@@ -217,7 +217,7 @@ const convertCFGToElements = (cfgData: CFGData) => {
 };
 
 const convertDFGToElements = (dfgData: DFGData) => {
-  const edges: any[] = [];
+  const edges: cytoscape.ElementDefinition[] = [];
   Object.values(dfgData.edges).forEach((edge: DFGEdge) => {
     edges.push({
       data: {
@@ -291,7 +291,7 @@ const Graph = forwardRef<GraphRef>((_props, ref) => {
     const stored = localStorage.getItem(DEF_USE_EDGES_KEY);
     return stored === null ? true : stored === 'true';
   };
-  const [elements, setElements] = useState<any[]>([]);
+  const [elements, setElements] = useState<cytoscape.ElementDefinition[]>([]);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [showDefUseEdges, setShowDefUseEdges] = useState<boolean>(getInitialShowDefUseEdges());
   const selectedNode = useRef<string | null>(null);
@@ -436,7 +436,7 @@ const Graph = forwardRef<GraphRef>((_props, ref) => {
   };
 
   const handleZoomOrPan = (cy: cytoscape.Core) => {
-    return (_event: cytoscape.EventObject) => {
+    return () => {
       console.log('Saving zoom and pan info');
       saveZoomInfo(cy);
     }
@@ -631,12 +631,13 @@ function layoutGraph(cy: cytoscape.Core, callback?: () => void) {
 
   // Layout only CFG nodes and edges
   const layoutElements = cfgNodes.union(cfgEdges);
-  const layout = layoutElements.layout({
+  const options: dagre.DagreLayoutOptions = {
     name: 'dagre',
     rankSep: 50,
     nodeSep: 80,
     ranker: 'tight-tree'
-  } as any);
+  };
+  const layout = layoutElements.layout(options);
 
   layout.on('layoutstop', () => {
     // Show DFG edges after layout

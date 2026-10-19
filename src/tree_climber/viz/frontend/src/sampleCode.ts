@@ -71,3 +71,19 @@ export function loadCode(language: string): string {
 export function saveCode(language: string, code: string): void {
   localStorage.setItem(keyFor(language), code);
 }
+
+const LANGUAGE_KEY = 'tree_climber_selected_language';
+
+export function loadLanguage(): string {
+  // Load the selected language from localStorage or default to 'c'
+  let language = localStorage.getItem(LANGUAGE_KEY);
+  if (!language) {
+    language = 'c'; // Default to 'c' if no language is set
+  }
+  saveLanguage(language);
+  return language;
+}
+
+export function saveLanguage(language: string): void {
+  localStorage.setItem(LANGUAGE_KEY, language);
+}

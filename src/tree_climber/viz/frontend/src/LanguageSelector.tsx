@@ -1,4 +1,5 @@
 import React from 'react';
+import { saveLanguage } from './sampleCode';
 
 interface LanguageSelectorProps {
   language: string;
@@ -11,20 +12,10 @@ const SUPPORTED_LANGUAGES = [
   { value: 'python', label: 'Python' },
 ] as const;
 
-export function loadLanguage(): string {
-  // Load the selected language from localStorage or default to 'c'
-  let language = localStorage.getItem('tree_climber_selected_language');
-  if (!language) {
-    language = 'c'; // Default to 'c' if no language is set
-  }
-  localStorage.setItem('tree_climber_selected_language', language);
-  return language;
-}
-
 export function LanguageSelector({ language, onLanguageChange }: LanguageSelectorProps) {
   // Save selected language to localStorage whenever it changes
   React.useEffect(() => {
-    localStorage.setItem('tree_climber_selected_language', language);
+    saveLanguage(language);
   }, [language]);
 
   return (

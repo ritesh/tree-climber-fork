@@ -263,7 +263,7 @@ These are the known gaps in the existing languages. A construct without a visit 
 - A statement is one CFG node. It is not split into separate assignments.
 - Aliasing is not modelled, within a function or between functions.
 - Calls are linked by name within one file. A function is analysed once for all its callers.
-- A write through a field or subscript is a weak update: the root name is both defined and used. (C pointer writes and Java field writes are not tracked at all; see below.)
+- A write through a field or subscript is a weak update: the root name is both defined and used. (C pointer writes and Java writes through `this` are not tracked at all; see below.)
 
 ### C (`c.py`)
 
@@ -278,13 +278,13 @@ These are the known gaps in the existing languages. A construct without a visit 
 
 ### Java (`java.py`)
 
-**Modelled:** classes and methods, `if`, `while`, `do`, `for`, enhanced `for`, `switch` with `case ... :` groups, `break`, `continue`, `return`, and `MUTATING_METHODS` (`list.add(x)` is a weak update of `list`).
+**Modelled:** classes and methods, `if`, `while`, `do`, `for`, enhanced `for`, `switch` with `case ... :` groups, `break`, `continue`, `return`, `MUTATING_METHODS` (`list.add(x)` is a weak update of `list`), and writes into a named variable's fields and elements (`o.f = v` and `a[i] = v` are weak updates of `o` and `a`).
 
 **Not modelled:**
 - Exceptions: `try`, `catch`, `finally`, `throw` and try-with-resources have no visit methods. Their parts run in order, and no exception edges exist.
 - Arrow `switch` rules (`case 1 -> ...`) run one after another. A `switch` expression used as a value is one statement, with its `yield`s inside.
 - `assert` and `synchronized` are plain statements.
-- Field and array writes: `o.f = v`, `this.f = v` and `a[i] = v` define nothing.
+- Writes whose target does not start with a name: `this.f = v`, `super.f = v` and `get().f = v` define nothing.
 - Lambdas and anonymous classes stay inside their statement. Their calls count as calls of that statement.
 - Free variables (captured locals and fields) are not connected between methods. Arguments and returns are.
 
