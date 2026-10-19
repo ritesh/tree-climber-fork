@@ -7,17 +7,22 @@ is the whole right-hand side of an assignment (`assigned_to`), and which enclosi
 the result feeds (`feeds`). `function_calls` is derived from the sites.
 """
 
+from collections import Counter
 from pathlib import Path
 from typing import List
 
 import pytest
 
-from tree_climber.ast_utils import parse_source_to_ast
+from tree_climber.ast_utils import dfs, parse_source_to_ast
 from tree_climber.cfg.builder import CFGBuilder
+from tree_climber.cfg.call_sites import preorder
 from tree_climber.cfg.cfg_types import CallSite, CFGNode
+from tree_climber.cfg.languages.c import CCFGVisitor
+from tree_climber.cfg.languages.java import JavaCFGVisitor
 from tree_climber.cfg.languages import python_calls
 from tree_climber.cfg.languages import python_bindings
 from tree_climber.cfg.languages.python_bindings import collect_bindings
+from tree_climber.cfg.visitor import NodeFacts
 from tree_climber.language_registry import create_visitor
 
 ROOT = Path(__file__).parent
@@ -851,3 +856,123 @@ class TestDirectUses:
 
         assert case.metadata.direct_uses == case.metadata.variable_uses == ["Color"]
         assert capture.metadata.direct_uses == capture.metadata.variable_uses == ["v"]
+
+
+FIXTURES = (
+    ("python", "python_cfg/*.py"),
+    ("c", "c_cfg/*.c"),
+    ("java", "java_cfg/*.java"),
+)
+
+
+def fixture_trees():
+    for language, pattern in FIXTURES:
+        for path in sorted(ROOT.glob(pattern)):
+            yield language, path.name, parse_source_to_ast(path.read_text(), language)
+
+
+def every_node(root):
+    return list(preorder(root))
+
+
+class TestOnePassFacts:
+    """`node_facts` collects a node's metadata in fewer walks than the four getters
+    it stands for; the results must be the same."""
+
+    def test_node_facts_equal_the_getters_on_every_cfg_node(self):
+        for language, name, tree in fixture_trees():
+            builder = CFGBuilder(language)
+            builder.setup_parser()
+            cfg = builder.build_cfg(tree=tree)
+            visitor = create_visitor(language)
+            for node in cfg.nodes.values():
+                if node.ast_node is None:
+                    continue
+                expected = NodeFacts(
+                    call_sites=visitor.get_call_sites(node.ast_node),
+                    definitions=visitor.get_definitions(node.ast_node),
+                    uses=visitor.get_uses(node.ast_node),
+                    direct_uses=visitor.get_direct_uses(node.ast_node),
+                )
+                assert visitor.node_facts(node.ast_node) == expected, (
+                    name,
+                    node.source_text,
+                )
+
+    @pytest.mark.parametrize("language", ["c", "java"])
+    def test_occurrences_under_any_node_equal_a_walk_of_that_node(self, language):
+        visitor = create_visitor(language)
+        assert isinstance(visitor, (CCFGVisitor, JavaCFGVisitor))
+
+        def reference_direct_uses(node):
+            names = dfs(node, visitor._use_of)
+            counts = Counter(names)
+            stack = [node]
+            while stack:
+                current = stack.pop()
+                if current.type in visitor.CALLS:
+                    counts.subtract(dfs(current, visitor._use_of))
+                else:
+                    stack.extend(current.children)
+            return [n for n in dict.fromkeys(names) if counts[n] > 0]
+
+        for tree_language, name, tree in fixture_trees():
+            if tree_language != language:
+                continue
+            found = visitor._occurrences(tree.root_node)
+            for node in every_node(tree.root_node):
+                where = (name, node.start_point, node.type)
+                assert found.uses(node) == dfs(node, visitor._use_of), where
+                assert found.direct_uses(node) == reference_direct_uses(node), where
+            assert found.definitions == dfs(tree.root_node, visitor._definition_of)
+            calls = [n for n in every_node(tree.root_node) if n.type in visitor.CALLS]
+            assert found.calls == calls
+
+    def test_python_direct_uses_from_the_bindings_walk_equal_a_separate_walk(self):
+        for language, name, tree in fixture_trees():
+            if language != "python":
+                continue
+            for node in every_node(tree.root_node):
+                calls = list(python_calls.call_nodes(node))
+                assert collect_bindings(node, calls).direct_uses == (
+                    python_calls.direct_uses(node)
+                ), (name, node.start_point, node.type)
+
+    def test_python_scope_names_come_from_one_walk_of_the_body(self, monkeypatch):
+        source = (
+            "def f(a):\n"
+            "    global g\n"
+            "    if a:\n"
+            "        nonlocal_free = 1\n"
+            "        global h, g\n"
+            "    def inner():\n"
+            "        nonlocal a\n"
+            "        global hidden\n"
+            "    class C:\n"
+            "        global also_hidden\n"
+            "    g = h = b = 2\n"
+        )
+        tree = parse_source_to_ast(source, "python")
+        function = tree.root_node.named_children[0]
+        runs = []
+        original = python_bindings._Collector.run
+
+        def counting(self, *tasks):
+            runs.append(tasks)
+            return original(self, *tasks)
+
+        monkeypatch.setattr(python_bindings._Collector, "run", counting)
+
+        locals_, globals_, nonlocals = python_bindings.function_scope_names(function)
+
+        assert locals_ == ["a", "nonlocal_free", "inner", "C", "b"]
+        assert globals_ == ["g", "h", "g"]
+        assert nonlocals == []
+        assert len(runs) == 1
+
+        inner = next(
+            n
+            for n in preorder(function)
+            if n.type == "function_definition" and n.id != function.id
+        )
+        assert python_bindings.function_scope_names(inner) == ([], ["hidden"], ["a"])

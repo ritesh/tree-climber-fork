@@ -44,15 +44,14 @@ from tree_climber.cfg.languages.python_calls import (
 from tree_climber.cfg.languages.python_bindings import (
     collect_bindings,
     collect_for_header_bindings,
-    collect_local_names,
     collect_uses,
     collect_pattern_bindings,
-    declared_scope_names,
+    function_scope_names,
     is_irrefutable_pattern,
     parameter_infos,
     parameter_names,
 )
-from tree_climber.cfg.visitor import CFGVisitor
+from tree_climber.cfg.visitor import CFGVisitor, NodeFacts
 
 
 NON_RAISING_STATEMENTS = frozenset(
@@ -130,6 +129,16 @@ class PythonCFGVisitor(CFGVisitor):
     def get_direct_uses(self, ast_node: Node) -> List[str]:
         """Variable uses under an AST node outside any call."""
         return direct_uses(ast_node)
+
+    def node_facts(self, ast_node: Node) -> NodeFacts:
+        calls = list(call_nodes(ast_node))
+        bindings = collect_bindings(ast_node, calls)
+        return NodeFacts(
+            call_sites=call_sites(ast_node, calls),
+            definitions=bindings.definitions,
+            uses=bindings.uses,
+            direct_uses=bindings.direct_uses,
+        )
 
     # Helpers
     @staticmethod
@@ -453,7 +462,7 @@ class PythonCFGVisitor(CFGVisitor):
         )
         infos = parameter_infos(parameters)
         is_constructor = is_method and function_name == "__init__"
-        globals_, nonlocals = declared_scope_names(node)
+        locals_, globals_, nonlocals = function_scope_names(node)
         return FunctionInfo(
             call_name=qualifier.rsplit(".", 1)[-1]
             if is_constructor and qualifier
@@ -467,7 +476,7 @@ class PythonCFGVisitor(CFGVisitor):
             parent=self.context.entry_node_ids[-1]
             if self.context.entry_node_ids
             else None,
-            locals=collect_local_names(node),
+            locals=locals_,
             globals=globals_,
             nonlocals=nonlocals,
         )

@@ -316,6 +316,8 @@ Calls are resolved by name only. A call to `run` reaches every function named `r
 | `get_direct_uses` | names read outside any call | `x` |
 | `get_call_sites` | one `CallSite` per call: callee, arguments, receiver, where its result goes | `f(z)`, assigned to nothing |
 
+`create_node` asks `node_facts` for all four at once. By default it calls the four methods, but each built-in language overrides it to collect them in fewer walks of the subtree. C and Java walk it once (`Occurrences` in `call_sites.py`), and Python finds the call nodes once and gets the definitions, uses and direct uses from one bindings walk.
+
 One more rule lives in the base class. A call to a mutating method, such as `items.append(v)`, counts as a definition of `items`. The node also reads `items`, so the old contents flow through it to later reads. This is a *weak update*: the list changes, but it is not replaced.
 
 #### No recursion over syntax trees

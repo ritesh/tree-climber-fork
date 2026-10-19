@@ -8,16 +8,14 @@ from typing import List, Optional, Tuple
 from tree_sitter import Node
 
 from tree_climber.ast_utils import (
-    dfs,
     get_child_by_field_name,
     get_required_child_by_field_name,
     get_source_text,
 )
 from tree_climber.cfg.call_sites import (
     CallRegions,
+    Occurrences,
     link_call_flows,
-    preorder,
-    uses_outside_calls,
     with_span,
 )
 from tree_climber.cfg.cfg_types import (
@@ -28,7 +26,7 @@ from tree_climber.cfg.cfg_types import (
     NodeType,
     ParameterInfo,
 )
-from tree_climber.cfg.visitor import CFGVisitor
+from tree_climber.cfg.visitor import CFGVisitor, NodeFacts
 
 
 class JavaCFGVisitor(CFGVisitor):
@@ -125,10 +123,11 @@ class JavaCFGVisitor(CFGVisitor):
     def get_call_sites(self, ast_node: Node) -> List[CallSite]:
         """Describe every method invocation under an AST node (`new Foo(x)` is not
         a method invocation and is not recorded)."""
+        return self._call_sites(self._occurrences(ast_node))
+
+    def _call_sites(self, found: Occurrences) -> List[CallSite]:
         pairs: List[Tuple[CallSite, Node]] = []
-        for call in preorder(ast_node):
-            if call.type != "method_invocation":
-                continue
+        for call in found.calls:
             name = call.child_by_field_name("name")
             receiver = call.child_by_field_name("object")
             callee_text = (
@@ -143,13 +142,13 @@ class JavaCFGVisitor(CFGVisitor):
                 arguments=[
                     CallArgument(
                         text=get_source_text(a),
-                        uses=self.get_uses(a),
-                        direct_uses=self.get_direct_uses(a),
+                        uses=found.uses(a),
+                        direct_uses=found.direct_uses(a),
                     )
                     for a in self._argument_nodes(call)
                 ],
                 assigned_to=self._assigned_names(call),
-                receiver_uses=self.get_direct_uses(receiver) if receiver else None,
+                receiver_uses=found.direct_uses(receiver) if receiver else None,
             )
             pairs.append((with_span(site, call), call))
         link_call_flows(
@@ -162,28 +161,18 @@ class JavaCFGVisitor(CFGVisitor):
         )
         return [site for site, _ in pairs]
 
+    def node_facts(self, ast_node: Node) -> NodeFacts:
+        found = self._occurrences(ast_node)
+        return NodeFacts(
+            call_sites=self._call_sites(found),
+            definitions=found.definitions,
+            uses=found.uses(ast_node),
+            direct_uses=found.direct_uses(ast_node),
+        )
+
     def get_definitions(self, ast_node: Node) -> List[str]:
         """Extract variable definitions under an AST node."""
-
-        def process_definition(node: Node) -> Optional[str]:
-            if (
-                node.type == "identifier"
-                and node.parent
-                and node.parent.type in ["enhanced_for_statement"]
-            ):
-                return get_source_text(node)
-            if node.type == "variable_declarator":
-                # Look for identifier in declarator
-                for child in node.children:
-                    if child.type == "identifier":
-                        return get_source_text(child)
-            elif node.type == "update_expression":
-                return self._written_variable(next(iter(node.named_children), None))
-            elif node.type == "assignment_expression":
-                return self._written_variable(node.child_by_field_name("left"))
-            return None
-
-        return dfs(ast_node, process_definition)
+        return self._occurrences(ast_node).definitions
 
     @staticmethod
     def _written_variable(target: Optional[Node]) -> Optional[str]:
@@ -209,48 +198,87 @@ class JavaCFGVisitor(CFGVisitor):
 
     def get_direct_uses(self, ast_node: Node) -> List[str]:
         """Variable uses under an AST node outside any call."""
-        return uses_outside_calls(ast_node, self.get_uses, self.CALLS)
+        return self._occurrences(ast_node).direct_uses(ast_node)
 
     def get_uses(self, ast_node: Node) -> List[str]:
         """Extract variable uses under an AST node."""
+        return self._occurrences(ast_node).uses(ast_node)
 
-        def process_use(node: Node) -> Optional[str]:
-            if node.type == "identifier":
-                # Skip identifiers in various contexts where they're not "uses"
-                if node.parent:
-                    if node.parent.type in [
-                        "method_declaration",  # Function defs
-                        "parameter",  # Parameter declarations
-                        "class_declaration",  # Class names
-                    ]:
+    USE_TYPES = frozenset({"identifier"})
+    DEFINITION_TYPES = frozenset(
+        {
+            "identifier",
+            "variable_declarator",
+            "update_expression",
+            "assignment_expression",
+        }
+    )
+
+    def _occurrences(self, ast_node: Node) -> Occurrences:
+        return Occurrences(
+            ast_node,
+            self._use_of,
+            self._definition_of,
+            self.CALLS,
+            self.USE_TYPES,
+            self.DEFINITION_TYPES,
+        )
+
+    def _definition_of(self, node: Node) -> Optional[str]:
+        """The variable a node defines, if any."""
+        if (
+            node.type == "identifier"
+            and node.parent
+            and node.parent.type in ["enhanced_for_statement"]
+        ):
+            return get_source_text(node)
+        if node.type == "variable_declarator":
+            # Look for identifier in declarator
+            for child in node.children:
+                if child.type == "identifier":
+                    return get_source_text(child)
+        elif node.type == "update_expression":
+            return self._written_variable(next(iter(node.named_children), None))
+        elif node.type == "assignment_expression":
+            return self._written_variable(node.child_by_field_name("left"))
+        return None
+
+    def _use_of(self, node: Node) -> Optional[str]:
+        """The variable a node uses, if any."""
+        if node.type == "identifier":
+            # Skip identifiers in various contexts where they're not "uses"
+            if node.parent:
+                if node.parent.type in [
+                    "method_declaration",  # Function defs
+                    "parameter",  # Parameter declarations
+                    "class_declaration",  # Class names
+                ]:
+                    return None
+                if node.parent.type == "method_invocation":
+                    # Only the method name is skipped; the receiver is a use
+                    if node == node.parent.child_by_field_name("name"):
                         return None
-                    if node.parent.type == "method_invocation":
-                        # Only the method name is skipped; the receiver is a use
-                        if node == node.parent.child_by_field_name("name"):
-                            return None
-                    if node.parent.type == "field_access":
-                        # Only the field name is skipped; the object is a use
-                        if node == node.parent.child_by_field_name("field"):
-                            return None
-                    if node.parent.type == "variable_declarator":
-                        # Only the declared name is skipped; the initializer is a use
-                        if node == node.parent.child_by_field_name("name"):
-                            return None
-                    if node.parent.type == "update_expression":
-                        # Check if this is the target (left side) of the update
-                        if node == node.parent.children[0]:
+                if node.parent.type == "field_access":
+                    # Only the field name is skipped; the object is a use
+                    if node == node.parent.child_by_field_name("field"):
+                        return None
+                if node.parent.type == "variable_declarator":
+                    # Only the declared name is skipped; the initializer is a use
+                    if node == node.parent.child_by_field_name("name"):
+                        return None
+                if node.parent.type == "update_expression":
+                    # Check if this is the target (left side) of the update
+                    if node == node.parent.children[0]:
+                        return get_source_text(node)
+                if node.parent.type == "assignment_expression":
+                    # Check if this is the target (left side) of the assignment
+                    if node == node.parent.children[0]:
+                        if node.parent.children[1].type in ("-=", "+=", "*=", "/="):
+                            # Compound assignment, treat as use
                             return get_source_text(node)
-                    if node.parent.type == "assignment_expression":
-                        # Check if this is the target (left side) of the assignment
-                        if node == node.parent.children[0]:
-                            if node.parent.children[1].type in ("-=", "+=", "*=", "/="):
-                                # Compound assignment, treat as use
-                                return get_source_text(node)
-                            return None  # Simple assignment target, not a use
-                return get_source_text(node)
-            return None
-
-        return dfs(ast_node, process_use)
+                        return None  # Simple assignment target, not a use
+            return get_source_text(node)
+        return None
 
     def is_linear_statement(self, node: Node) -> bool:
         """Check if a node represents a simple linear statement"""
