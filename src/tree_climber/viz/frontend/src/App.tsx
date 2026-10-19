@@ -1,10 +1,10 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useCallback } from 'react'
 import Editor from './Editor'
 import Graph from './Graph'
 import Findings from './Findings'
-import {LanguageSelector, loadLanguage} from './LanguageSelector'
+import { LanguageSelector } from './LanguageSelector'
 import { GraphProvider } from './GraphContext'
-import { loadCode } from './sampleCode'
+import { loadLanguage } from './sampleCode'
 
 // Define the interface for Graph component ref
 interface GraphRef {
@@ -13,30 +13,19 @@ interface GraphRef {
 
 function App() {
   const [language, setLanguage] = useState(loadLanguage());
-  const [isInitialized, setIsInitialized] = useState(false);
   const graphRef = useRef<GraphRef>(null);
 
-  const handleCodeChange = async (code: string) => {
+  // The editor calls this with the new language's code when the language changes
+  const handleCodeChange = useCallback(async (code: string) => {
     // Call backend /parse and update the graph
     if (graphRef.current) {
       try {
         await graphRef.current.updateGraph(code, language);
-        if (!isInitialized) {
-          setIsInitialized(true);
-        }
       } catch (error) {
         console.error('Error updating graph:', error);
       }
     }
-  };
-
-  // Handle language changes - update graph with current code
-  useEffect(() => {
-    if (isInitialized && graphRef.current) {
-      // Get the new language's code and update the graph
-      handleCodeChange(loadCode(language));
-    }
-  }, [language, isInitialized]);
+  }, [language]);
 
   return (
     <GraphProvider>

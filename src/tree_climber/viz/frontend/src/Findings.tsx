@@ -1,5 +1,5 @@
-import { useGraph } from './GraphContext';
-import type { PathStep } from './GraphContext';
+import { useGraph } from './graphState';
+import type { PathStep } from './graphState';
 import './Findings.css';
 
 function stepLabel(step: PathStep, index: number): string {

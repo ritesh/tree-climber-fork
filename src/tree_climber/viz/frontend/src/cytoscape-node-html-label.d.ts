@@ -1,5 +1,4 @@
 // TypeScript declarations for cytoscape-node-html-label
-import type cytoscape from 'cytoscape';
 
 declare module 'cytoscape' {
   interface Core {
@@ -11,9 +10,11 @@ declare module 'cytoscape' {
         halignBox?: string;
         valignBox?: string;
         cssClass?: string;
-        tpl: (data: any) => string;
+        tpl: (data: Record<string, unknown>) => string;
       }>,
       options?: { enablePointerEvents?: boolean }
     ): void;
   }
 }
+
+export {};
