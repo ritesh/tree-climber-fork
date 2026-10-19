@@ -8,6 +8,10 @@ The receiver of a method call or field access (`list` in `list.add(x)`, `o` in
 `o.field`) is a use; the method or field name is not. Class names used as
 receivers (`System`, `Math`) are reported as uses too, since a name cannot be
 resolved to a type here; they have no reaching definition, so they add no edges.
+
+A write into a field or an element of a named variable (`o.f = x`, `a[i] = x`)
+is a weak update: the root name is defined and used. A target whose root is
+not a name (`this.f`, `get().f`) defines nothing.
 """
 
 import pytest
@@ -45,7 +49,6 @@ def bindings_of(statement: str):
         ("int z = o.get(x).size();", ["z"], ["o", "x"]),
         ("o.a.b.c();", [], ["o"]),
         ("sb.append(a).append(b);", [], ["sb", "a", "b"]),
-        ("o.f = x;", [], ["o", "x"]),
         ("this.f = x;", [], ["x"]),
         ("System.out.println(y);", [], ["System", "y"]),
         ("Math.max(a, b);", [], ["Math", "a", "b"]),
@@ -68,6 +71,31 @@ def test_receivers_are_uses(statement, definitions, uses):
     ],
 )
 def test_method_names_and_plain_statements_are_unchanged(statement, definitions, uses):
+    actual_definitions, actual_uses = bindings_of(statement)
+    assert actual_definitions == sorted(definitions), f"definitions of {statement!r}"
+    assert actual_uses == sorted(uses), f"uses of {statement!r}"
+
+
+@pytest.mark.parametrize(
+    "statement, definitions, uses",
+    [
+        ("o.f = x;", ["o"], ["o", "x"]),
+        ("o.a.b = x;", ["o"], ["o", "x"]),
+        ("arr[0] = x;", ["arr"], ["arr", "x"]),
+        ("m[i][j] = x;", ["m"], ["i", "j", "m", "x"]),
+        ("o.items[i] = x;", ["o"], ["i", "o", "x"]),
+        ("arr[i] += x;", ["arr"], ["arr", "i", "x"]),
+        ("arr[i]++;", ["arr"], ["arr", "i"]),
+        ("++o.n;", ["o"], ["o"]),
+        ("o.f = y = x;", ["o", "y"], ["o", "x"]),
+        ("this.f = x;", [], ["x"]),
+        ("this.a[0] = x;", [], ["x"]),
+        ("super.f = x;", [], ["x"]),
+        ("get().f = x;", [], ["x"]),
+        ("this.n++;", [], []),
+    ],
+)
+def test_field_and_element_writes_are_weak_updates(statement, definitions, uses):
     actual_definitions, actual_uses = bindings_of(statement)
     assert actual_definitions == sorted(definitions), f"definitions of {statement!r}"
     assert actual_uses == sorted(uses), f"uses of {statement!r}"
@@ -107,3 +135,31 @@ class TestDefUseChains:
 
         assert def_use_chains(code, "o") == {"f": ["int y = o.field;"]}
         assert def_use_chains(code, "y") == {"int y = o.field;": ["return y;"]}
+
+    def test_an_element_write_flows_into_a_later_read(self):
+        code = "class A { int[] f(int[] arr, int x) { arr[0] = x; return arr; } }"
+
+        assert def_use_chains(code, "arr") == {
+            "f": ["arr[0] = x;"],
+            "arr[0] = x;": ["return arr;"],
+        }
+        assert def_use_chains(code, "x") == {"f": ["arr[0] = x;"]}
+
+    def test_a_field_write_reaches_a_later_read(self):
+        code = "class A { int f(Obj o, int x) { o.n = x; return o.n; } }"
+
+        assert def_use_chains(code, "o") == {
+            "f": ["o.n = x;"],
+            "o.n = x;": ["return o.n;"],
+        }
+
+    def test_a_plain_assignment_replaces_the_value(self):
+        code = (
+            "class A { int[] f(int[] arr, int[] b) {"
+            " arr[0] = 1; arr = b; return arr; } }"
+        )
+
+        assert def_use_chains(code, "arr") == {
+            "f": ["arr[0] = 1;"],
+            "arr = b;": ["return arr;"],
+        }

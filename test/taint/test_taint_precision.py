@@ -208,6 +208,18 @@ class TestFieldSensitivity:
             'd["k"] = input() -> @deco -> system(f)'
         ]
 
+    def test_java_fields_and_elements(self):
+        code = (
+            "class A { void f(Req o, String[] argv) {"
+            " o.a = input(); system(o.b); system(o.a);"
+            " argv[0] = input(); system(argv[1]); system(argv[0]); } }"
+        )
+        assert len(flows(code, "java")) == 4
+        assert texts(code, "java", field_sensitive=True) == [
+            "o.a = input(); -> system(o.a);",
+            "argv[0] = input(); -> system(argv[0]);",
+        ]
+
     def test_java_reads(self):
         code = "class A { void f() { Req p = input(); system(p.a); } }"
         assert len(flows(code, "java", field_sensitive=True)) == 1
